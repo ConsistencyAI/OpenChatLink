@@ -1,4 +1,5 @@
 export const PROTOCOL = 'openchatlink/1';
+import {limitMessages, normalizePreferences, snapshotKey} from './preferences.js';
 
 export function parsePairing(code) {
   if (typeof code !== 'string' || !code.startsWith('ocl1.') || code.length > 1024) {
@@ -19,18 +20,18 @@ export function parsePairing(code) {
   return pairing;
 }
 
-export function toWireConversation(conversation) {
+export function toWireConversation(conversation, preferences = {}) {
   if (typeof conversation.externalId !== 'string' || !/^[a-f0-9-]{32,36}$/i.test(conversation.externalId)) {
     throw new Error('ChatGPT returned an unsupported conversation ID.');
   }
-  const messages = (conversation.messages ?? []).filter(message =>
+  const visible = (conversation.messages ?? []).filter(message =>
     ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' && message.content.trim()
-  ).map((message, index) => ({
-    index,
+  ).map(message => ({
     role: message.role,
     text: message.content,
     createdAt: Number.isSafeInteger(message.createdAt) ? message.createdAt : conversation.createdAt,
   }));
+  const messages = limitMessages(visible, normalizePreferences(preferences)).map((message, index) => ({index, ...message}));
   if (messages.length > 20000) throw new Error('This conversation is too large to sync.');
   return {
     id: conversation.externalId,
@@ -41,7 +42,7 @@ export function toWireConversation(conversation) {
   };
 }
 
-export function createClient(pairing, fetcher = fetch, signal, progress = async () => {}) {
+export function createClient(pairing, fetcher = fetch, signal, progress = async () => {}, preferences = {}) {
   const base = `http://127.0.0.1:${pairing.port}/openchatlink/v1`;
   async function request(path, body) {
     let response;
@@ -69,7 +70,8 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
       if (source !== 'chatgpt-web') throw new Error('Only personal ChatGPT conversations are enabled.');
       let accepted = 0;
       for (const conversation of conversations) {
-        const payload = {conversation: toWireConversation(conversation)};
+        const payload = {conversation: toWireConversation(conversation, preferences)};
+        if (!payload.conversation.messages.length) continue;
         if (new TextEncoder().encode(JSON.stringify(payload)).length > 8 * 1024 * 1024) {
           throw new Error('This conversation is too large to sync.');
         }
@@ -83,12 +85,15 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
   };
 }
 
-export async function collect({pairing, saved = {}, full = false, collector, fetcher, signal, report = async () => {}}) {
-  const client = createClient(pairing, fetcher, signal, () => report({phase: 'saving'}));
+export async function collect({pairing, preferences = {}, saved = {}, full = false, collector, fetcher, signal, report = async () => {}}) {
+  preferences = normalizePreferences(preferences);
+  const filterKey = snapshotKey(preferences);
+  const client = createClient(pairing, fetcher, signal, () => report({phase: 'saving'}), preferences);
   const health = await client.health();
-  const state = !full && saved.connectionId === health.connectionId ? saved.state ?? {} : {};
+  const state = !full && saved.connectionId === health.connectionId && saved.filterKey === filterKey ? saved.state ?? {} : {};
   const result = await collector({state, push: client.push, register: async () => {},
-                                  log: () => {}, report, personalOnly: true, signal, maxConversations: 50});
-  return {connectionId: health.connectionId, state: result.state, count: result.conversations,
-          targetName: health.targetName, hasMore: Boolean(result.hasMore)};
+                                  log: () => {}, report, personalOnly: true, signal, maxConversations: 50, preferences});
+  return {connectionId: health.connectionId, filterKey, state: result.state, count: result.conversations,
+          targetName: health.targetName, hasMore: Boolean(result.hasMore),
+          ...(result.failures > 0 ? {failures: result.failures} : {})};
 }

@@ -1647,10 +1647,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..28284e3df
+index 000000000..b8a2273c1
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,112 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink's unpacked Chrome extension sends personal ChatGPT history directly
@@ -1663,9 +1663,15 @@ index 000000000..28284e3df
 +2. Select the destination avatar in Phase Pal. Enable Store Chat History.
 +3. In Chat Settings > General > External Conversations, enable personal ChatGPT
 +   sync and copy the connection code into the extension.
-+4. Chats appear in Chat History as Chrome collects them. The extension polls
-+   once per minute and checkpoints large imports in batches of 50.
-+5. Sending text in a synced original first creates a local copy and submits
++4. Click the extension icon to open its settings tab. Load the chat titles and
++   select specific conversations, or explicitly choose all personal chats.
++5. Choose all history, the last 100 visible messages per chat, or messages on or
++   after a chosen date (00:00 UTC). Choose automatic or manual sync, then save.
++   Automatic sync checks once per minute. Manual mode runs only when requested;
++   continuation batches finish that request without enabling recurring sync.
++6. Chats appear in Chat History as Chrome collects the chosen text. Initial
++   collection is limited to selected chats; no selection means no import.
++7. Sending text in a synced original first creates a local copy and submits
 +   through the existing ChatV2 submit coordinator. The banner explains that
 +   local changes cannot sync back and offers Open in ChatGPT or View synced
 +   original. Continue in Phase Pal can also create the copy before voice or edits.
@@ -1676,6 +1682,15 @@ index 000000000..28284e3df
 +message, and truncation paths enforce the same write policy. Whole-chat deletion,
 +pinning, and title renaming remain available. Deleted mirrors are not recreated.
 +Any unexpected local modification causes a conflict instead of overwrite.
++
++Selecting chats is account-scoped. The picker fetches one page of titles at a
++time and does not fetch transcript bodies. Sync fetches bodies only for the
++chosen chats. Saved filters reset collection checkpoints when the chosen chats
++or history window change. A schedule change alone keeps the checkpoint.
++History limits apply before the text DTO is sent to the existing app receiver.
++Nonempty snapshots can update a mirror to a smaller window; local copies stay
++independent. Deselection stops future updates and leaves existing history in
++place. Chats with no matching text are skipped rather than deleted.
 +
 +Incoming chats belong to the avatar selected when sync was enabled. To change
 +that destination, disable sync, select another avatar, then reconnect the
@@ -1727,6 +1742,8 @@ index 000000000..28284e3df
 +
 +## Verification
 +
++The following managed checks were completed for the initial app integration.
++
 +Four affected assemblies (Core, Runtime, Toolkit, Platform) compiled using their
 +generated project source/reference lists and available Unity reference assemblies.
 +No Unity process was launched.
@@ -1737,9 +1754,12 @@ index 000000000..28284e3df
 +write policy, role rejection, cancellation, HTTP ingestion/authentication/origin
 +checks, secure pairing, consent revocation, late completions, and rejection before
 +provider dispatch. Both character and global history stores were checked.
-+Eight Node tests cover extension protocol, bounded collection checkpoints,
-+personal-account and visible-text filtering, watermark ownership, and revocation.
++Twenty-one Node tests now cover extension protocol, selected-chat and visible-text
++filtering, history limits, filter/checkpoint ownership, manual/automatic scheduling,
++restart continuation, cancellation, and revocation. A Chrome UI check with
++synthetic chat data verified picking chats across pages, selecting history/date
++limits, saving manual mode, and invoking Sync now. It did not access ChatGPT.
 +
-+Live Chrome loading, UI rendering, scene transitions, and packaged player QA
++Live Chrome extension loading, Phase Pal UI rendering, scene transitions, and packaged player QA
 +still require a Phase Pal build containing this integration. The unchanged
 +offline importer remains available as a separate fallback.

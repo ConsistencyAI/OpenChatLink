@@ -6,3 +6,8 @@ input {box-sizing:border-box; width:100%; padding:11px; border:1px solid #5e6780
 .actions {display:flex; flex-wrap:wrap; gap:8px; margin:14px 0;}
 button {padding:9px 13px; border:1px solid #697ba9; border-radius:6px; background:#33426a; color:#fff; cursor:pointer;}
 button:disabled {opacity:.5; cursor:default;} #status {min-height:24px;} .note {padding:12px; background:#22293a; border-radius:6px;} summary {cursor:pointer;}
+select {width:100%; padding:10px; background:#202536; color:#edf0f9; border:1px solid #5e6780; border-radius:6px;}
+h2 {font-size:18px; margin-top:26px;} [hidden] {display:none !important;}
+#chat-list {max-height:320px; overflow:auto; margin:12px 0; border:1px solid #5e6780; border-radius:6px;}
+.chat-choice {display:flex; align-items:flex-start; gap:10px; margin:0; padding:10px; border-bottom:1px solid #343c51;}
+.chat-choice input {width:auto; margin-top:4px;} .chat-choice span {overflow-wrap:anywhere;}

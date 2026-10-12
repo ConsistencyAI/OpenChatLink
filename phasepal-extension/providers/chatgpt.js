@@ -10,6 +10,7 @@ import {
   thinkingPart,
   toMs,
 } from '../lib/common.js';
+import {canCollect, conversationKey, isConversationId, normalizePreferences} from '../preferences.js';
 
 const BASE = 'https://chatgpt.com';
 const PAGE_SIZE = 50;
@@ -49,6 +50,7 @@ async function listAccounts(token, signal) {
         id,
         name: account?.organization_name || account?.name || account?.plan_type || 'personal',
         isWorkspace: (account?.structure ?? account?.plan_type) === 'workspace',
+        isPersonal: account?.structure === 'personal',
       });
     }
     if (accounts.length > 0) return accounts;
@@ -73,6 +75,30 @@ async function* listUpdatedConversations(token, accountId, sinceMs, signal) {
     }
     if (items.length < PAGE_SIZE || offset + PAGE_SIZE >= (data?.total ?? 0)) return;
   }
+}
+
+/** Returns one bounded page of personal chat titles without fetching transcript bodies. */
+export async function listChatGPTConversations({cursor = null, signal} = {}) {
+  const index = cursor?.accountIndex ?? 0;
+  const offset = cursor?.offset ?? 0;
+  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(offset) || offset < 0 || offset > 1000000)
+    throw new Error('Refresh the ChatGPT list.');
+  const token = await getAccessToken(signal);
+  const accounts = (await listAccounts(token, signal)).filter(account => account.isPersonal);
+  if (!accounts.length) throw new Error('No personal ChatGPT account was found.');
+  if (index >= accounts.length) throw new Error('Your ChatGPT accounts changed. Refresh the list.');
+  const account = accounts[index];
+  const data = await fetchJson(`${BASE}/backend-api/conversations?offset=${offset}&limit=${PAGE_SIZE}&order=updated`,
+    {headers: authHeaders(token, account.id), signal});
+  const rows = data?.items ?? [];
+  const items = rows.filter(row => isConversationId(row.id)).map(row => ({
+    accountId: account.id, id: row.id.toLowerCase(), title: String(row.title ?? 'Untitled ChatGPT chat').slice(0, 300),
+    updatedAt: toMs(row.update_time),
+  }));
+  const more = rows.length === PAGE_SIZE && (typeof data.total !== 'number' || offset + PAGE_SIZE < data.total);
+  const nextCursor = more ? {accountIndex: index, offset: offset + PAGE_SIZE}
+    : index + 1 < accounts.length ? {accountIndex: index + 1, offset: 0} : null;
+  return {items, nextCursor};
 }
 
 /** Linearize the active branch of the mapping tree (current_node -> root).
@@ -277,17 +303,21 @@ function toParsedConversation(detail, conversationId, accountId) {
   };
 }
 
-export async function syncChatGPT({ state, push, register = async () => {}, log, report = async () => {}, personalOnly = true, signal, maxConversations = 50 }) {
+export async function syncChatGPT({ state, push, register = async () => {}, log, report = async () => {}, personalOnly = true, signal, maxConversations = 50, preferences = {} }) {
+  preferences = normalizePreferences(preferences);
+  if (!canCollect(preferences)) return {state, conversations: 0};
+  const selected = new Set(preferences.selected.map(row => conversationKey(row.accountId, row.id)));
   const deadline = Date.now() + 20000;
   await report({ phase: 'discovering' });
   const token = await getAccessToken(signal);
   await report({ phase: 'discovering' });
-  const accounts = (await listAccounts(token, signal)).filter(account => !personalOnly || !account.isWorkspace);
+  const accounts = (await listAccounts(token, signal)).filter(account => !personalOnly || account.isPersonal);
   if (!accounts.length) throw new Error('No personal ChatGPT account was found. Switch to your personal account and try again.');
   const newState = { ...state, accounts: {...state.accounts} };
   let total = 0;
   let detected = 0;
   let processed = 0;
+  let failed = 0;
 
   for (const account of accounts) {
     const key = account.id ?? 'default';
@@ -303,6 +333,7 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
     let first = true;
     for await (const item of listUpdatedConversations(token, account.id, since, signal)) {
       signal?.throwIfAborted();
+      if (!isConversationId(item.id) || (preferences.chats === 'selected' && !selected.has(conversationKey(account.id, item.id)))) continue;
       const version = toMs(item.update_time) ?? 0;
       if (seen[item.id] === version) continue;
       detected++;
@@ -320,6 +351,7 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
       } catch (err) {
         signal?.throwIfAborted();
         failures++;
+        failed++;
         log(`chatgpt: skipping conversation ${item.id}: ${err.message}`);
         if (err instanceof RateLimitedError) break;
       }
@@ -332,7 +364,7 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
       if (processed >= maxConversations || Date.now() >= deadline) {
         if (batch.length) total += await push(sourceId, 'chatgpt-web', batch);
         newState.accounts[key] = {lastSyncMs, runStartedMs, seen, name: account.name};
-        return {state: newState, conversations: total, hasMore: true};
+        return {state: newState, conversations: total, hasMore: true, failures: failed};
       }
     }
     if (batch.length > 0) {
@@ -354,5 +386,5 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
 
   await report({ phase: 'complete', detected, processed });
 
-  return { state: newState, conversations: total };
+  return { state: newState, conversations: total, failures: failed };
 }

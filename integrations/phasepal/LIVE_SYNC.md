@@ -5,6 +5,13 @@ runtime. This source patch adds **External Conversations** to Chat Settings and
 the banner used for synced originals and local copies. See the
 [user setup](../../phasepal-extension/README.md).
 
+Extension 0.3 adds selected/all chats, all/last-100/date-limited history, and
+automatic/manual scheduling. These choices use the existing receiver DTO and
+need no additional app runtime change beyond this patch. The current Phase Pal
+documentation was updated in the main worktree after the integration was merged.
+If Phase Pal already includes the live-sync patch, reload the updated extension
+to get these controls. Do not apply the app patch again.
+
 ## Apply to Phase Pal
 
 The patch was prepared against Phase Pal commit
@@ -42,7 +49,8 @@ contract is in the added `Phase Pal/Docs/OpenChatLinkIntegration.md`.
 The four affected ChatV2 assemblies compiled using the generated project source
 and reference lists with the available Unity reference assemblies. Seventeen
 behavior cases passed in a standalone managed harness with the real history
-stores and HTTP receiver, plus eight Node extension tests. No Unity process was
+stores and HTTP receiver. Extension 0.3 passes 21 Node tests and a browser UI
+check with synthetic chat data. No Unity process was
 launched. These checks do not prove Unity UI rendering or packaged-player behavior.
 
 Live Chrome pairing, OS credential stores on each target platform, scene changes,
