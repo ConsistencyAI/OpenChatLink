@@ -1125,10 +1125,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..d4f4da7d1
+index 000000000..47f2dd1df
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,108 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1186,7 +1186,14 @@ index 000000000..d4f4da7d1
 +            _copyCode.AddToClassList("chat-v2-settings-action-button");
 +            _copyCode.AddToClassList("chat-v2-external-copy-code");
 +            connectionActions.Add(_copyCode); connectionRow.Add(connectionActions); _group.Add(connectionRow);
-+            root.Q<VisualElement>("chat-v2-settings-section-general")?.Add(_group);
++            var section = root.Q<VisualElement>("chat-v2-settings-section-general");
++            if (section != null)
++            {
++                var anchor = section.Q<VisualElement>("chat-v2-settings-row-character-personality")
++                    ?? section.Q<VisualElement>("chat-v2-settings-row-user-display-name");
++                if (anchor?.parent == section) section.Insert(section.IndexOf(anchor) + 1, _group);
++                else section.Add(_group);
++            }
 +            _banner = new VisualElement { name = "chat-v2-external-conversation-banner" };
 +            _banner.AddToClassList("chat-v2-external-banner");
 +            _bannerText = new Label(); _bannerText.AddToClassList("chat-v2-external-banner-text"); _banner.Add(_bannerText);
@@ -1786,3 +1793,17 @@ index 000000000..b8a2273c1
 +Live Chrome extension loading, Phase Pal UI rendering, scene transitions, and packaged player QA
 +still require a Phase Pal build containing this integration. The unchanged
 +offline importer remains available as a separate fallback.
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs
+index e73fa7b00..f48b1b2c5 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs	
+@@ -4852,6 +4852,9 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             AppendSettingsGroup(root, _refs.GeneralSection, null, null,
+                 "chat-v2-settings-row-language",
+                 "chat-v2-settings-row-user-display-name",
++                "chat-v2-settings-row-share-chats",
++                "chat-v2-settings-row-character-personality",
++                "chat-v2-settings-external-conversations",
+                 "chat-v2-settings-row-communication-style",
+                 "chat-v2-settings-row-response-verbosity",
+                 "chat-v2-settings-row-primary-use-case",
