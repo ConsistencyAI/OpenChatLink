@@ -5,12 +5,12 @@ runtime. This source patch adds **External Conversations** to Chat Settings and
 the banner used for synced originals and local copies. See the
 [user setup](../../phasepal-extension/README.md).
 
-Extension 0.3 adds selected/all chats, all/last-100/date-limited history, and
-automatic/manual scheduling. These choices use the existing receiver DTO and
-need no additional app runtime change beyond this patch. The current Phase Pal
-documentation was updated in the main worktree after the integration was merged.
-If Phase Pal already includes the live-sync patch, reload the updated extension
-to get these controls. Do not apply the app patch again.
+The extension includes selected/all chats, all/last-100/date-limited history, and
+automatic/manual scheduling. Version 0.4 requires the explicit provider field in
+the current app contract. Use the current extension and app source together.
+The app registry stores source identity separately from character assignment;
+there is no migration for earlier unreleased imports. If the app patch is already
+merged, update its source changes instead of applying the full patch again.
 
 ## Apply to Phase Pal
 
@@ -36,7 +36,9 @@ contract is in the added `Phase Pal/Docs/OpenChatLinkIntegration.md`.
 
 - Pair once with a connection code stored through Phase Pal's OS credential store.
 - Personal ChatGPT text history arrives on authenticated IPv4 loopback port 41771.
-- Source snapshots keep stable IDs and update without duplicate messages.
+- One original exists per provider/account/conversation, regardless of character.
+- Its home is assigned on first import. Changing the target affects new chats.
+- Sharing changes chat visibility, without changing source IDs or assignments.
 - Sending text creates an independent local copy before the existing submit flow.
 - The local-copy banner offers **Open in ChatGPT** and **View synced original**.
 - Voice and edit actions on the original require **Continue in Phase Pal** first.
@@ -46,12 +48,12 @@ contract is in the added `Phase Pal/Docs/OpenChatLinkIntegration.md`.
 
 ## Verification
 
-The four affected ChatV2 assemblies compiled using the generated project source
-and reference lists with the available Unity reference assemblies. Seventeen
-behavior cases passed in a standalone managed harness with the real history
-stores and HTTP receiver. Extension 0.3 passes 21 Node tests and a browser UI
-check with synthetic chat data. No Unity process was
-launched. These checks do not prove Unity UI rendering or packaged-player behavior.
+The initial four affected ChatV2 assemblies compiled with the available Unity
+reference assemblies. The identity update compiled Platform and passed 22 managed
+behavior cases with the real history stores and HTTP receiver, including different
+character targets and shared visibility. Extension 0.4 passes 21 Node tests. The
+earlier browser UI check used synthetic chat data. No Unity process was launched.
+These checks do not prove Unity UI rendering or packaged-player behavior.
 
 Live Chrome pairing, OS credential stores on each target platform, scene changes,
 and the banner in a packaged player still need application QA. The collector uses

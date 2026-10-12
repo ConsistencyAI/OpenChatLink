@@ -34,6 +34,7 @@ export function toWireConversation(conversation, preferences = {}) {
   const messages = limitMessages(visible, normalizePreferences(preferences)).map((message, index) => ({index, ...message}));
   if (messages.length > 20000) throw new Error('This conversation is too large to sync.');
   return {
+    source: 'chatgpt',
     id: conversation.externalId,
     accountId: conversation.metadata?.accountId ?? 'personal',
     title: (conversation.title ?? 'ChatGPT conversation').slice(0, 300),

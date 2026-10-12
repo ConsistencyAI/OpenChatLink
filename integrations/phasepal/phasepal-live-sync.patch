@@ -296,7 +296,7 @@ index 000000000..21688186f
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 new file mode 100644
-index 000000000..c0bdaf4a0
+index 000000000..e9ada8a7b
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs	
 @@ -0,0 +1,190 @@
@@ -427,7 +427,7 @@ index 000000000..c0bdaf4a0
 +                        if (generation != _generation || !_historyConsent) throw new OperationCanceledException();
 +                        var result = await _store.ImportAsync(conversation, targetId, targetName, cancellation);
 +                        if (generation == _generation && !cancellation.IsCancellationRequested)
-+                        { if (result.Changed) _changedSessions.Enqueue(result.SessionId); SetStatus("ChatGPT sync is connected to " + targetName + "."); }
++                        { if (result.Changed) _changedSessions.Enqueue(result.SessionId); SetStatus("ChatGPT sync is connected. New chats go to " + targetName + "."); }
 +                        return new { protocol = ChatV2ExternalConversationReceiver.PROTOCOL,
 +                            accepted = result.Accepted, conflict = result.Conflict };
 +                    });
@@ -492,10 +492,10 @@ index 000000000..c0bdaf4a0
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
 new file mode 100644
-index 000000000..8f668fb7f
+index 000000000..5ec8e6032
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs	
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,245 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
 +using System;
 +using System.Collections.Generic;
@@ -524,7 +524,8 @@ index 000000000..8f668fb7f
 +
 +        public sealed class Record
 +        {
-+            public string SessionId, CharacterId, ChatGptId, AccountId, SourceTitle, HistoryHash, OriginalSessionId;
++            public string SessionId, Source, ExternalId, AccountId, AssignedCharacterId, AssignedCharacterName;
++            public string SourceTitle, HistoryHash, OriginalSessionId;
 +            public bool Deleted;
 +        }
 +
@@ -544,7 +545,7 @@ index 000000000..8f668fb7f
 +            if (File.Exists(_statePath))
 +            {
 +                var root = JObject.Parse(File.ReadAllText(_statePath));
-+                if ((int?)root["schema"] != 1) throw new InvalidDataException("Unsupported external conversation state.");
++                if ((int?)root["schema"] != 2) throw new InvalidDataException("Unsupported external conversation state.");
 +                loaded = root["records"]?.ToObject<Dictionary<string, Record>>() ??
 +                    throw new InvalidDataException("External conversation state needs recovery.");
 +            }
@@ -560,7 +561,7 @@ index 000000000..8f668fb7f
 +        {
 +            Dictionary<string, Record> snapshot;
 +            lock (_recordsGate) snapshot = new Dictionary<string, Record>(_records, StringComparer.Ordinal);
-+            string json = JsonConvert.SerializeObject(new { schema = 1, records = snapshot });
++            string json = JsonConvert.SerializeObject(new { schema = 2, records = snapshot });
 +            Directory.CreateDirectory(Path.GetDirectoryName(_statePath));
 +            string temporary = _statePath + ".tmp";
 +            File.WriteAllText(temporary, json);
@@ -578,9 +579,9 @@ index 000000000..8f668fb7f
 +            {
 +                if (!_records.TryGetValue(sessionId ?? string.Empty, out Record record) || record.Deleted) return null;
 +                return new ChatV2ExternalConversationInfo { SessionId = record.SessionId,
-+                    CharacterId = record.CharacterId,
++                    CharacterId = record.AssignedCharacterId,
 +                    OriginalSessionId = record.OriginalSessionId,
-+                    ChatGptUrl = "https://chatgpt.com/c/" + record.ChatGptId };
++                    ChatGptUrl = "https://chatgpt.com/c/" + record.ExternalId };
 +            }
 +        }
 +
@@ -642,16 +643,20 @@ index 000000000..8f668fb7f
 +            JObject conversation, string characterId, string characterName, CancellationToken token)
 +        {
 +            if (!PhasePalOwnedPathService.IsStrictIdentifier(characterId)) throw new InvalidDataException("Invalid target avatar.");
++            string source = (string)conversation["source"];
++            if (source != "chatgpt") throw new InvalidDataException("Unsupported conversation source.");
 +            if (!Guid.TryParse((string)conversation["id"], out Guid id)) throw new InvalidDataException("Invalid ChatGPT identity.");
-+            string account = (string)conversation["accountId"] ?? "personal";
-+            if (account != "personal" && !Guid.TryParse(account, out _)) throw new InvalidDataException("Invalid account identity.");
-+            string sid = "ocl-" + Hash(account + "\0" + id.ToString("D") + "\0" + characterId).Substring(0, 40);
++            string account = (string)conversation["accountId"];
++            if (account != "personal")
++            {
++                if (!Guid.TryParse(account, out Guid accountId)) throw new InvalidDataException("Invalid account identity.");
++                account = accountId.ToString("D");
++            }
++            string sid = "ocl-" + Hash(source + "\0" + account + "\0" + id.ToString("D")).Substring(0, 40);
 +            string title = (string)conversation["title"] ?? "ChatGPT conversation";
 +            if (title.Length > 300 || conversation["updatedAt"]?.Type != JTokenType.Integer)
 +                throw new InvalidDataException("Invalid conversation metadata.");
 +            DateTimeOffset updatedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)conversation["updatedAt"]);
-+            IReadOnlyList<ChatV2Message> incoming = ParseMessages(conversation, sid, characterId, characterName);
-+            if (incoming.Count == 0) return (sid, false, false, false);
 +            await _writer.WaitAsync(token).ConfigureAwait(false);
 +            try
 +            {
@@ -659,7 +664,12 @@ index 000000000..8f668fb7f
 +                Record record;
 +                lock (_recordsGate) _records.TryGetValue(sid, out record);
 +                if (record?.Deleted == true) return (sid, false, false, false);
-+                ChatV2SessionSummary summary = _history.GetSessionSummary(characterId, sid);
++                // Assignment is made on first import. A new pairing target does not move or duplicate the original.
++                string assignedCharacterId = record?.AssignedCharacterId ?? characterId;
++                string assignedCharacterName = record?.AssignedCharacterName ?? characterName ?? string.Empty;
++                IReadOnlyList<ChatV2Message> incoming = ParseMessages(conversation, sid, assignedCharacterId, assignedCharacterName);
++                if (incoming.Count == 0) return (sid, false, false, false);
++                ChatV2SessionSummary summary = _history.GetSessionSummary(assignedCharacterId, sid);
 +                if (record != null && summary == null)
 +                {
 +                    lock (_recordsGate) record.Deleted = true;
@@ -667,7 +677,7 @@ index 000000000..8f668fb7f
 +                    return (sid, false, false, false);
 +                }
 +                IReadOnlyList<ChatV2Message> existing = summary == null ? Array.Empty<ChatV2Message>() :
-+                    _history.LoadPage(characterId, sid, int.MaxValue);
++                    _history.LoadPage(assignedCharacterId, sid, int.MaxValue);
 +                string currentHash = Fingerprint(existing), incomingHash = Fingerprint(incoming);
 +                // An identical retry can recover a completed file write whose registry save failed.
 +                if (summary != null && currentHash != incomingHash &&
@@ -680,11 +690,12 @@ index 000000000..8f668fb7f
 +                token.ThrowIfCancellationRequested();
 +                if (currentHash != incomingHash || summary?.Title != chosenTitle)
 +                {
-+                    if (!_history.ImportSession(characterId, sid, chosenTitle, incoming, updatedAt, overwrite: true))
++                    if (!_history.ImportSession(assignedCharacterId, sid, chosenTitle, incoming, updatedAt, overwrite: true))
 +                        throw new IOException("Conversation history could not be saved.");
 +                }
-+                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, CharacterId = characterId,
-+                    ChatGptId = id.ToString("D"), AccountId = account, SourceTitle = title, HistoryHash = incomingHash };
++                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, Source = source,
++                    ExternalId = id.ToString("D"), AccountId = account, AssignedCharacterId = assignedCharacterId,
++                    AssignedCharacterName = assignedCharacterName, SourceTitle = title, HistoryHash = incomingHash };
 +                Save();
 +                return (sid, false, true, true);
 +            }
@@ -701,7 +712,7 @@ index 000000000..8f668fb7f
 +                Record original;
 +                lock (_recordsGate) _records.TryGetValue(sessionId, out original);
 +                if (original == null || original.Deleted || !string.IsNullOrEmpty(original.OriginalSessionId)) return sessionId;
-+                var messages = _history.LoadPage(original.CharacterId, sessionId, int.MaxValue);
++                var messages = _history.LoadPage(original.AssignedCharacterId, sessionId, int.MaxValue);
 +                if (messages.Count == 0) throw new IOException("The synced conversation is no longer available.");
 +                string sid = Guid.NewGuid().ToString("D");
 +                var copies = new List<ChatV2Message>(messages.Count);
@@ -717,11 +728,12 @@ index 000000000..8f668fb7f
 +                        messageParts: message.MessageParts, attachments: message.Attachments));
 +                }
 +                token.ThrowIfCancellationRequested();
-+                string title = (_history.GetSessionSummary(original.CharacterId, sessionId)?.Title ?? "ChatGPT conversation") + " (local copy)";
++                string title = (_history.GetSessionSummary(original.AssignedCharacterId, sessionId)?.Title ?? "ChatGPT conversation") + " (local copy)";
 +                if (!_history.ImportSession(characterId, sid, title, copies, overwrite: true))
 +                    throw new IOException("Local copy could not be saved.");
-+                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, CharacterId = characterId,
-+                    ChatGptId = original.ChatGptId, AccountId = original.AccountId, OriginalSessionId = sessionId };
++                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, AssignedCharacterId = characterId,
++                    Source = original.Source, ExternalId = original.ExternalId, AccountId = original.AccountId,
++                    OriginalSessionId = sessionId };
 +                Save();
 +                return sid;
 +            }
@@ -1350,10 +1362,10 @@ index cdc53ab40..3ec8fe819 100644
              if (model == null)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
-index 000000000..f057c472b
+index 000000000..7cefef8c0
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,350 @@
 +// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 +using System;
 +using System.IO;
@@ -1395,7 +1407,7 @@ index 000000000..f057c472b
 +        }
 +        private static JObject Conversation(string reply = "こんにちは")
 +            => new JObject {
-+                ["id"] = "00000000-0000-4000-8000-000000000001", ["accountId"] = "personal",
++                ["source"] = "chatgpt", ["id"] = "00000000-0000-4000-8000-000000000001", ["accountId"] = "personal",
 +                ["title"] = "Reina", ["updatedAt"] = 1720000100123L,
 +                ["messages"] = new JArray(
 +                    new JObject { ["index"] = 0, ["role"] = "user", ["text"] = "Hello | 🌸", ["createdAt"] = 1720000000123L },
@@ -1440,6 +1452,82 @@ index 000000000..f057c472b
 +            Assert.That(_store.CanWrite(copy), Is.True);
 +        }
 +
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task AnotherCharacterUpdatesSameOriginalAndCanCreateIndependentCopy(bool global)
++        {
++            if (global) _history = new ChatV2GlobalHistoryStore(Path.Combine(_root, "ChatV2History"));
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            var retry = await _store.ImportAsync(Conversation(), "other", "Other", CancellationToken.None);
++            Assert.That(retry.SessionId, Is.EqualTo(original.SessionId));
++            Assert.That(retry.Changed, Is.False);
++            var update = await _store.ImportAsync(Conversation("Updated"), "other", "Other", CancellationToken.None);
++            Assert.That(update.SessionId, Is.EqualTo(original.SessionId));
++            Assert.That(update.Accepted, Is.True);
++            Assert.That(_store.GetInfo(original.SessionId).CharacterId, Is.EqualTo("avatar"));
++            var rows = _history.LoadPage("avatar", original.SessionId, 10);
++            Assert.That(rows.Last().Text, Is.EqualTo("Updated"));
++            Assert.That(rows.Last().Metadata[ChatV2CharacterMetadata.TURN_CHARACTER_ID], Is.EqualTo("avatar"));
++            Assert.That(_history.ListSessions("other", 10), Is.Empty);
++            if (global)
++            {
++                bool shared = true;
++                var visible = new ChatV2SessionHistoryService(_history, () => "other",
++                    globalIdentity: true, sharedSessions: () => shared);
++                visible.CanWriteSession = _store.CanWrite;
++                Assert.That(visible.ListSessions(10).Select(chat => chat.SessionId), Is.EqualTo(new[] { original.SessionId }));
++                visible.LoadSession(original.SessionId, 10);
++                visible.Append(new ChatV2Message(ChatV2MessageId.Create(null), ChatV2MessageRole.User, "Blocked"));
++                Assert.That(_history.LoadPage("avatar", original.SessionId, 10).Count, Is.EqualTo(2));
++                shared = false;
++                Assert.That(visible.ListSessions(10), Is.Empty);
++                shared = true;
++                Assert.That(visible.ListSessions(10).Count, Is.EqualTo(1));
++            }
++            string copy = await _store.CreateLocalCopyAsync(original.SessionId, "other", CancellationToken.None);
++            Assert.That(_store.GetInfo(copy).CharacterId, Is.EqualTo("other"));
++            Assert.That(_store.GetInfo(copy).OriginalSessionId, Is.EqualTo(original.SessionId));
++            Assert.That(_store.CanWrite(copy), Is.True);
++            Assert.That(_store.CanWrite(original.SessionId), Is.False);
++            await _store.ImportAsync(Conversation("New source reply"), "other", "Other", CancellationToken.None);
++            Assert.That(_history.LoadPage("other", copy, 10).Last().Text, Is.EqualTo("Updated"));
++            Assert.That(_history.ListSessions("avatar", 10).Count, Is.EqualTo(1));
++            Assert.That(_history.ListSessions("other", 10).Count, Is.EqualTo(1));
++        }
++
++        [Test]
++        public async Task AccountIdentityIsNormalizedAndDifferentAccountsStaySeparate()
++        {
++            JObject payload = Conversation();
++            payload["accountId"] = "AAAAAAAA-0000-4000-8000-000000000001";
++            var original = await _store.ImportAsync(payload, "avatar", "Reina", CancellationToken.None);
++            payload["accountId"] = "aaaaaaaa000040008000000000000001";
++            payload["id"] = "00000000000040008000000000000001";
++            Assert.That((await _store.ImportAsync(payload, "other", "Other", CancellationToken.None)).SessionId,
++                Is.EqualTo(original.SessionId));
++            payload["accountId"] = "personal";
++            var separate = await _store.ImportAsync(payload, "other", "Other", CancellationToken.None);
++            Assert.That(separate.SessionId, Is.Not.EqualTo(original.SessionId));
++            Assert.That(_store.GetInfo(separate.SessionId).CharacterId, Is.EqualTo("other"));
++        }
++
++        [TestCase(null)]
++        [TestCase("claude")]
++        public async Task UnsupportedSourcesAreRejected(string source)
++        {
++            JObject payload = Conversation();
++            payload["source"] = source;
++            try
++            {
++                await _store.ImportAsync(payload, "avatar", "Reina", CancellationToken.None);
++                Assert.Fail("Unsupported source was accepted.");
++            }
++            catch (InvalidDataException) { }
++            Assert.That(_history.ListSessions("avatar", 10), Is.Empty);
++        }
++
 +        [Test]
 +        public async Task LocalModificationIsNeverOverwritten()
 +        {
@@ -1457,9 +1545,10 @@ index 000000000..f057c472b
 +            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
 +            _history.DeleteSession("avatar", original.SessionId);
 +            _store = new ChatV2ExternalConversationStore(_history, _root);
-+            var result = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            var result = await _store.ImportAsync(Conversation(), "other", "Other", CancellationToken.None);
 +            Assert.That(result.Accepted, Is.False);
 +            Assert.That(_history.GetSessionSummary("avatar", original.SessionId), Is.Null);
++            Assert.That(_history.ListSessions("other", 10), Is.Empty);
 +        }
 +
 +        [Test]
@@ -1677,10 +1766,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..b8a2273c1
+index 000000000..cee0a6ba9
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,130 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink's unpacked Chrome extension sends personal ChatGPT history directly
@@ -1722,10 +1811,19 @@ index 000000000..b8a2273c1
 +independent. Deselection stops future updates and leaves existing history in
 +place. Chats with no matching text are skipped rather than deleted.
 +
-+Incoming chats belong to the avatar selected when sync was enabled. To change
-+that destination, disable sync, select another avatar, then reconnect the
-+extension. Existing chats and copies keep their owners. The explicit scoped
-+runtime data path separates accounts, Steam channels, and Direct data.
++Each source/account/conversation has one synced original. Its home character is
++assigned on first import and stored separately from its identity. To choose a
++home for new chats, disable sync, select another avatar, then reconnect the
++extension. Reimporting an existing chat updates its original home; it does not
++move the chat or create another original. Local copies have independent IDs and
++can belong to the character that continues the chat. The explicit scoped runtime
++data path separates accounts, Steam channels, and Direct data.
++
++Share chats between characters changes history visibility and keeps the current
++chat open during character changes. It does not change import identity, home
++assignment, selection, or schedule. Turning sharing off shows chats in their home
++groups. The original remains protected in both modes; continuing creates a local
++copy. Character personality applies to new replies through the existing setting.
 +
 +## Ownership and lifecycle
 +
@@ -1744,8 +1842,10 @@ index 000000000..b8a2273c1
 +Copy completion is rejected after a session, character, or host lifetime change.
 +The original composer draft is retained when preparation fails.
 +
-+The source registry is in Settings/external_conversations.json; preferences
-+are in Settings/external_conversation_settings.json. Neither contains pairing
++The source registry is in Settings/external_conversations.json. It
++uses schema 2 with source identity and separate character assignment; preferences
++are in Settings/external_conversation_settings.json. No migration or compatibility
++loader is provided for the unreleased schema 1. Neither file contains pairing
 +credentials. The existing OS credential-store adapter accepts a scoped target
 +name while preserving its original External Memory defaults.
 +
@@ -1760,10 +1860,11 @@ index 000000000..b8a2273c1
 +  cancellation bound receiver work. Transfer-Encoding is rejected.
 +- No caller-supplied directory, avatar ID, URL, shell command, tool call, system
 +  prompt, or executable configuration is accepted.
-+- The text DTO contains one ChatGPT UUID, account scope, title, timestamp, and
-+  ordered user/assistant messages. System and tool roles are rejected.
-+- Source identity combines the ChatGPT account, conversation, and destination
-+  avatar. Replays are idempotent; local copies use independent IDs.
++- The text DTO requires source `chatgpt`, one ChatGPT UUID, account scope, title,
++  timestamp, and ordered user/assistant messages. System and tool roles are rejected.
++- Source identity combines the provider, normalized account, and normalized
++  conversation ID. Character assignment is independent. Replays are idempotent;
++  local copies use independent IDs. Other providers are not enabled by this change.
 +
 +Only text is mirrored. ChatGPT browser credentials, attachments, saved memory,
 +custom GPT instructions, and model state are not imported. This is not a
@@ -1789,6 +1890,12 @@ index 000000000..b8a2273c1
 +restart continuation, cancellation, and revocation. A Chrome UI check with
 +synthetic chat data verified picking chats across pages, selecting history/date
 +limits, saving manual mode, and invoking Sync now. It did not access ChatGPT.
++
++The identity update compiled the Platform assembly and passed 22 managed cases,
++including reimport through another character after restart, sharing visibility,
++protected originals, independent local copies, normalized account identity, and
++deletion through a different import target. The extension passed its 21 Node cases
++with the required source field. These checks did not start Unity.
 +
 +Live Chrome extension loading, Phase Pal UI rendering, scene transitions, and packaged player QA
 +still require a Phase Pal build containing this integration. The unchanged

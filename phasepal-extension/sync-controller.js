@@ -43,7 +43,7 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       await api.storage.local.set({saved: result, batchPending: result.hasMore, status: {running: false,
         message: result.failures > 0 ? `Some chats could not be read. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
           : result.hasMore ? 'Sync is continuing with the next batch…'
-          : `Synced ${result.count} conversations in this batch to ${result.targetName || 'Phase Pal'}.`,
+          : `Synced ${result.count} conversations in this batch. New chats go to ${result.targetName || 'Phase Pal'}.`,
         ...(result.failures > 0 ? {} : {lastSuccess: Date.now()})}});
       await api.action.setBadgeText({text: result.failures > 0 ? '!' : ''});
       if (result.hasMore) await api.alarms.create(CONTINUE, {delayInMinutes: 0.5});

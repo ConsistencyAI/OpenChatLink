@@ -15,7 +15,7 @@ test('pairing permits only bounded loopback credentials', () => {
   }
 });
 test('wire keeps text and time but omits system, tools, attachments, and browser credentials', () => {
-  assert.deepEqual(toWireConversation(conversation),{id:conversation.externalId,accountId:'personal',title:'Reina',
+  assert.deepEqual(toWireConversation(conversation),{source:'chatgpt',id:conversation.externalId,accountId:'personal',title:'Reina',
     updatedAt:1700000000000,messages:[{index:0,role:'user',text:'こんにちは',createdAt:1700000000123},
                                   {index:1,role:'assistant',text:'Hello',createdAt:1700000000000}]});
 });

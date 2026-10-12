@@ -45,11 +45,15 @@ select **Continue in Phase Pal** before sending, editing, or using voice.
 Changing the avatar for new imports requires disabling sync, selecting the new
 avatar, and enabling sync again. Copy the new connection code into the extension.
 Previously imported chats and their local copies keep their existing owners.
+Each source/account/conversation has one synced original. Reimporting it with
+another avatar selected updates that same original without moving it or creating
+a duplicate. **Share chats between characters** makes the history available to
+other characters; it does not change the chat's home or its sync choices.
 Turning sync off in Phase Pal closes the receiver; **Disconnect** in the extension
 stops browser collection and removes its saved connection.
 
-After upgrading from 0.2, select chats and save your options. Earlier automatic
-sync-all settings do not imply permission to import all chats in 0.3.
+Use the current extension and Phase Pal source patch together. This unreleased
+integration has no migration for earlier development imports.
 
 Text and message timestamps are imported. Images, files, hidden system messages,
 tool calls, saved ChatGPT memory, and custom GPT settings are not imported.
