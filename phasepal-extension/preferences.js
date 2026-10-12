@@ -19,7 +19,7 @@ export function normalizePreferences(value = {}) {
   const unique = new Map();
   for (const row of selected) {
     if (!row || !isConversationId(row.id) || typeof row.accountId !== 'string' ||
-        !/^[a-zA-Z0-9_-]{1,128}$/.test(row.accountId)) throw new Error('Choose chats from the ChatGPT list.');
+        !/^[a-zA-Z0-9_-]{1,128}$/.test(row.accountId)) throw new Error('Choose chats from the source list.');
     const entry = {accountId: row.accountId, id: row.id.toLowerCase()};
     if (row.title !== undefined) {
       if (typeof row.title !== 'string' || row.title.length > 300) throw new Error('Invalid selected chat title. Reload the chat list.');

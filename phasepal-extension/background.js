@@ -1,6 +1,6 @@
-import {createSyncController} from './sync-controller.js';
+import {createSourceController} from './sync-controller.js';
 
-const controller = createSyncController(chrome);
+const controller = createSourceController(chrome);
 chrome.runtime.onInstalled.addListener(() => {void controller.ready;});
 chrome.runtime.onStartup.addListener(() => {void controller.ready;});
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
@@ -9,10 +9,10 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   let action;
   switch (message?.type) {
     case 'connect': action = controller.connect(message.code); break;
-    case 'preferences': action = controller.save(message.preferences); break;
-    case 'list': action = controller.list(message.cursor); break;
+    case 'preferences': action = controller.save(message.source, message.preferences); break;
+    case 'list': action = controller.list(message.source, message.cursor); break;
     case 'disconnect': action = controller.disconnect(); break;
-    case 'sync': void controller.sync(Boolean(message.full)); reply({ok: true}); return;
+    case 'sync': action = controller.sync(message.source, Boolean(message.full)); break;
     default: return;
   }
   action.then(result => reply({ok: true, ...result}), error => reply({ok: false, error: error.message}));

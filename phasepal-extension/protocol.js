@@ -20,7 +20,7 @@ export function parsePairing(code) {
   return pairing;
 }
 
-export function toWireConversation(conversation, preferences = {}) {
+export function toWireConversation(conversation, preferences = {}, source = 'chatgpt') {
   if (typeof conversation.externalId !== 'string' || !/^[a-f0-9-]{32,36}$/i.test(conversation.externalId)) {
     throw new Error('ChatGPT returned an unsupported conversation ID.');
   }
@@ -34,7 +34,7 @@ export function toWireConversation(conversation, preferences = {}) {
   const messages = limitMessages(visible, normalizePreferences(preferences)).map((message, index) => ({index, ...message}));
   if (messages.length > 20000) throw new Error('This conversation is too large to sync.');
   return {
-    source: 'chatgpt',
+    source,
     id: conversation.externalId,
     accountId: conversation.metadata?.accountId ?? 'personal',
     title: (conversation.title ?? 'ChatGPT conversation').slice(0, 300),
@@ -67,11 +67,16 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
   }
   return {
     health: () => request('/health'),
+    localCatalog: (source, cursor) => request(`/local/${source}/catalog?offset=${cursor ?? 0}`),
+    localPreferences: (source, preferences) => request(`/local/${source}/preferences`, {preferences}),
+    localSync: source => request(`/local/${source}/sync`, {}),
+    pauseLocal: () => request('/local/codex/pause', {}),
     async push(source, _adapter, conversations) {
-      if (source !== 'chatgpt-web') throw new Error('Only personal ChatGPT conversations are enabled.');
+      const provider = source === 'chatgpt-web' ? 'chatgpt' : source === 'claude-web' ? 'claude' : null;
+      if (!provider) throw new Error('Unsupported browser source.');
       let accepted = 0;
       for (const conversation of conversations) {
-        const payload = {conversation: toWireConversation(conversation, preferences)};
+        const payload = {conversation: toWireConversation(conversation, preferences, provider)};
         if (!payload.conversation.messages.length) continue;
         if (new TextEncoder().encode(JSON.stringify(payload)).length > 8 * 1024 * 1024) {
           throw new Error('This conversation is too large to sync.');

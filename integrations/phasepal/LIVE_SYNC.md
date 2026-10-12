@@ -1,70 +1,62 @@
 # Phase Pal live-sync integration
 
-The Chrome extension talks directly to a receiver owned by Phase Pal's ChatV2
-runtime. This source patch adds **External Conversations** to Chat Settings and
-the banner used for synced originals and local copies. See the
-[user setup](../../phasepal-extension/README.md).
-
-The extension includes selected/all chats, all/last-100/date-limited history, and
-automatic/manual scheduling. Version 0.4 requires the explicit provider field in
-the current app contract. Use the current extension and app source together.
-The app registry stores source identity separately from character assignment;
-there is no migration for earlier unreleased imports. If the app patch is already
-merged, update its source changes instead of applying the full patch again.
+Extension 0.5 configures ChatGPT, Claude web, local Codex desktop/CLI, and Claude
+Code imports. Browser collection runs in Chrome. Phase Pal owns the local JSONL
+reader and checks opted-in histories about every five seconds. Each source has
+its own chat selection, history window, and automatic/manual schedule.
+See [user setup](../../phasepal-extension/README.md).
 
 ## Apply to Phase Pal
 
-The patch was prepared against Phase Pal commit
-`c8acaf445c7a780370b758d7e99c28c97f493d05` (Unity `6000.0.83f1`). From a compatible
-Phase Pal source checkout, use the path to this OpenChatLink checkout:
+Use the current extension and application source together. The integration is
+unreleased; registry schema 2 has no migration for earlier development imports.
+The full patch is based on Phase Pal commit
+`c8acaf445c7a780370b758d7e99c28c97f493d05` (Unity `6000.0.83f1`).
 
 ```sh
 git apply --check /path/to/OpenChatLink/integrations/phasepal/phasepal-live-sync.patch
 git apply /path/to/OpenChatLink/integrations/phasepal/phasepal-live-sync.patch
 ```
 
-Review the source changes and build the application through its normal platform
-workflow. Let Unity create the new script `.meta` files; this patch does not
-assign serialized GUIDs or change scenes. An existing installed Phase Pal binary
-does not gain the setting by loading the extension alone.
+If already merged, update the source changes instead of applying the full patch
+again. Build through the normal platform workflow. Let Unity create new `.meta`
+files; the patch does not assign GUIDs, alter scenes, or bundle dependencies.
+Loading the extension alone does not update an installed Phase Pal binary.
 
-The patch preserves the current history store, scoped runtime data directory,
-submit coordinator, provider selection, and tool approval rules. Its detailed
-contract is in the added `Phase Pal/Docs/OpenChatLinkIntegration.md`.
+## Behavior
 
-## Data and replies
+- One protected original per provider/account/conversation, with separate home
+  assignment. Changing the pairing target affects new chats.
+- Sharing changes visibility; it does not change sync choices or source identity.
+- Sending text creates an independent local copy through the existing submit flow.
+- Banners name the source and offer View synced original; web sources also offer
+  Open in ChatGPT/Claude. Voice and edits require Continue in Phase Pal first.
+- Deleted originals stay deleted; unexpected local changes cause conflicts.
+- Local readers never change source files or execute tools. No model state,
+  saved memory, assistant configuration, or hidden reasoning is transferred.
+- Host shutdown, sync disable, and history-consent revocation stop local work.
+  Disconnect in the extension pauses local collection as well as web collection.
 
-- Pair once with a connection code stored through Phase Pal's OS credential store.
-- Personal ChatGPT text history arrives on authenticated IPv4 loopback port 41771.
-- One original exists per provider/account/conversation, regardless of character.
-- Its home is assigned on first import. Changing the target affects new chats.
-- Sharing changes chat visibility, without changing source IDs or assignments.
-- Sending text creates an independent local copy before the existing submit flow.
-- The local-copy banner offers **Open in ChatGPT** and **View synced original**.
-- Voice and edit actions on the original require **Continue in Phase Pal** first.
-- Deleted mirrors stay deleted. Unexpected local modifications cause a conflict.
-- Saved ChatGPT memory, custom instructions, attachments, and model state are
-  outside this history bridge. Phase Pal replies cannot be sent back through it.
+The full contract, source paths, limits, and lifecycle are in the patched
+`Phase Pal/Docs/OpenChatLinkIntegration.md`. No server, local helper process,
+Python script, hstry database, or additional Unity package is required.
 
 ## Verification
 
-The initial four affected ChatV2 assemblies compiled with the available Unity
-reference assemblies. The identity update compiled Platform and passed 22 managed
-behavior cases with the real history stores and HTTP receiver, including different
-character targets and shared visibility. Extension 0.4 passes 21 Node tests. The
-earlier browser UI check used synthetic chat data. No Unity process was launched.
-These checks do not prove Unity UI rendering or packaged-player behavior.
-
-Live Chrome pairing, OS credential stores on each target platform, scene changes,
-and the banner in a packaged player still need application QA. The collector uses
-unofficial ChatGPT browser endpoints and can need updates when they change.
-The upstream `just check-all` command could not run because `just` is unavailable
-on this host. No Rust source was changed.
+32 managed cases passed with production history stores, the authenticated HTTP
+receiver, and synthetic local JSONL files. 27 Node cases passed, including Claude
+organization/branch isolation, bounded collection, and separate source controls.
+Core, Runtime, Toolkit, and Platform compiled initially; Core, Runtime, and Platform
+were recompiled after initial reader changes. Final receiver/reader sources
+compiled directly in the managed harness; a full current-worktree compile needs
+refreshed references for concurrent localization work. No Unity process was launched and no
+personal chats were accessed. Live website behavior, UI rendering, OS secret stores
+on each platform, and packaged-player QA remain separate checks.
+Upstream `just check-all` is unavailable on this host; no Rust code was changed.
 
 ## License
 
-The patch contains first-party Phase Pal source, tests, and documentation. It is
-covered by [PHASEPAL_SOURCE_LICENSE](PHASEPAL_SOURCE_LICENSE), copied from the
-Phase Pal source repository. It does not contain avatar assets, Unity packages,
-compiled helpers, player builds, credentials, or personal conversations.
-The extension's hstry-derived collector retains its adjacent MIT license.
+The patch contains first-party Phase Pal source, tests, and documentation under
+[PHASEPAL_SOURCE_LICENSE](PHASEPAL_SOURCE_LICENSE). It contains no avatar assets,
+compiled helpers, builds, credentials, or personal conversations. The hstry-derived
+ChatGPT/Claude collectors retain the adjacent MIT license and provenance notice.

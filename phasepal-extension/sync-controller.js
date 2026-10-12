@@ -1,4 +1,5 @@
 import {syncChatGPT, listChatGPTConversations} from './providers/chatgpt.js';
+import {syncClaude, listClaudeConversations} from './providers/claude.js';
 import {collect, createClient, parsePairing} from './protocol.js';
 import {canCollect, normalizePreferences, snapshotKey} from './preferences.js';
 
@@ -33,7 +34,7 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       if ((trigger === 'auto' && settings.schedule !== 'auto') || (trigger === 'continue' && !batchPending)) return;
       if (!canCollect(settings)) {await writeStatus('Select chats and save your options before syncing.'); return;}
       cancellation = new AbortController();
-      await writeStatus('Syncing your chosen ChatGPT history…', true);
+      await writeStatus('Syncing your chosen history…', true);
       const result = await collect({pairing: parsePairing(code), preferences: settings, saved, full,
         collector, fetcher, signal: cancellation.signal,
         report: async progress => owner === generation && writeStatus(
@@ -106,5 +107,62 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       await api.storage.local.remove(['code', 'saved', 'batchPending']);
       await writeStatus('Disconnected.');
     }),
+  };
+}
+
+export const SOURCES = ['chatgpt', 'claude', 'codex', 'claude-code'];
+export const isLocal = source => source === 'codex' || source === 'claude-code';
+
+function scopedApi(api, source) {
+  const key = name => name === 'code' ? name : `${name}:${source}`;
+  return {...api, storage: {local: {
+    async get(names) {const list = Array.isArray(names) ? names : [names]; const data = await api.storage.local.get(list.map(key)); return Object.fromEntries(list.map(name => [name, data[key(name)]]));},
+    set: data => api.storage.local.set(Object.fromEntries(Object.entries(data).map(([name, value]) => [key(name), value]))),
+    remove: names => api.storage.local.remove((Array.isArray(names) ? names : [names]).map(key)),
+  }}, alarms: {
+    create: (name, options) => api.alarms.create(`${name}:${source}`, options),
+    clear: name => api.alarms.clear(`${name}:${source}`),
+  }};
+}
+
+export function createSourceController(api, {fetcher, collectors = {}, catalogs = {}} = {}) {
+  const browsers = Object.fromEntries(['chatgpt', 'claude'].map(source => [source, createSyncController(scopedApi(api, source), {
+    fetcher, collector: collectors[source] ?? (source === 'chatgpt' ? syncChatGPT : syncClaude),
+    catalog: catalogs[source] ?? (source === 'chatgpt' ? listChatGPTConversations : listClaudeConversations)
+  })]));
+  const sourceApi = source => {
+    if (!SOURCES.includes(source)) throw new Error('Choose a supported source.');
+    return scopedApi(api, source);
+  };
+  const client = async () => createClient(parsePairing((await api.storage.local.get('code')).code), fetcher);
+  return {
+    ready: Promise.all(Object.values(browsers).map(controller => controller.ready)),
+    async connect(code) {
+      for (const controller of Object.values(browsers)) await controller.connect(code);
+      for (const source of ['codex', 'claude-code']) {
+        const {preferences} = await sourceApi(source).storage.local.get('preferences');
+        if (preferences) await (await client()).localPreferences(source, normalizePreferences(preferences));
+      }
+    },
+    async list(source, cursor) {sourceApi(source); return isLocal(source) ? (await client()).localCatalog(source, cursor) : browsers[source].list(cursor);},
+    async save(source, preferences) {
+      const scoped = sourceApi(source), settings = normalizePreferences(preferences);
+      if (!isLocal(source)) return browsers[source].save(settings);
+      await (await client()).localPreferences(source, settings);
+      await scoped.storage.local.set({preferences: settings, status: {running: false,
+        message: settings.schedule === 'auto' ? 'Saved. Phase Pal checks selected local chats every five seconds while sync is enabled.' : 'Saved. Select Sync now when ready.'}});
+    },
+    async sync(source, full = false) {
+      const scoped = sourceApi(source);
+      if (!isLocal(source)) return browsers[source].sync(full);
+      await (await client()).localSync(source);
+      await scoped.storage.local.set({status: {running: false, message: 'Local sync queued. Selected chats will appear in Phase Pal history.'}});
+    },
+    alarm(name) {const source = name.split(':')[1]; return browsers[source]?.alarm(name.split(':')[0]) ?? Promise.resolve();},
+    async disconnect() {
+      if ((await api.storage.local.get('code')).code) await (await client()).pauseLocal();
+      for (const controller of Object.values(browsers)) await controller.disconnect();
+      for (const source of ['codex', 'claude-code']) await sourceApi(source).storage.local.set({status: {message: 'Disconnected.', running: false}});
+    },
   };
 }

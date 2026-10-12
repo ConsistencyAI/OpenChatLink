@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSyncController, ALARM, CONTINUE} from '../sync-controller.js';
+import {createSyncController, createSourceController, ALARM, CONTINUE} from '../sync-controller.js';
 import {PROTOCOL} from '../protocol.js';
 
 const pairing={v:1,port:41771,token:'a'.repeat(64)};
@@ -86,4 +86,33 @@ test('a partial manual import reports failure and requires an explicit retry',as
   assert.match(api.state.status.message,/Select Sync now to retry/);
   assert.equal(api.state.status.lastSuccess,undefined);assert.equal(api.alarms.size,0);
   await controller.alarm(ALARM);assert.equal(calls,1);
+});
+
+test('browser sources keep independent choices, alarms and checkpoints', async () => {
+  const api = fakeApi({code, 'preferences:chatgpt': {chats: 'all', schedule: 'manual'}, 'preferences:claude': {chats: 'all', schedule: 'auto'}});
+  const calls = [];
+  const controller = createSourceController({...api, alarms: api.alarmsApi}, {
+    collectors: Object.fromEntries(['chatgpt', 'claude'].map(source => [source, async () => {calls.push(source); return {state: {source}, conversations: 1};}])),
+    fetcher: async () => ({ok: true, status: 200, json: async () => ({protocol: PROTOCOL, connectionId: 'scope'})})
+  });
+  await controller.ready;
+  assert.equal(api.alarms.has(ALARM + ':chatgpt'), false); assert.equal(api.alarms.has(ALARM + ':claude'), true);
+  await controller.alarm(ALARM + ':claude'); await controller.sync('chatgpt');
+  assert.deepEqual(calls, ['claude', 'chatgpt']);
+  assert.equal(api.state['saved:claude'].state.source, 'claude');
+  assert.equal(api.state['saved:chatgpt'].state.source, 'chatgpt');
+});
+
+test('local source controls use the authenticated app and disconnect pauses local work', async () => {
+  const api = fakeApi({code}), calls = [];
+  const controller = createSourceController({...api, alarms: api.alarmsApi}, {fetcher: async (url, init) => {
+    calls.push({url, init}); return {ok: true, status: 200, json: async () => ({protocol: PROTOCOL, items: [], nextCursor: null})};
+  }});
+  await controller.ready;
+  await controller.save('codex', {chats: 'all', schedule: 'auto'});
+  await controller.list('codex', 50); await controller.sync('codex'); await controller.disconnect();
+  assert.deepEqual(calls.map(row => new URL(row.url).pathname), ['/openchatlink/v1/local/codex/preferences',
+    '/openchatlink/v1/local/codex/catalog', '/openchatlink/v1/local/codex/sync', '/openchatlink/v1/local/codex/pause']);
+  assert.equal(calls[0].init.credentials, 'omit'); assert.equal(calls[0].init.headers.Authorization, 'Bearer ' + pairing.token);
+  assert.equal(api.state.code, undefined); assert.equal(api.state['preferences:codex'].chats, 'all');
 });
