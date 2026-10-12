@@ -1,0 +1,1745 @@
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/ChatV2SessionHistoryService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/ChatV2SessionHistoryService.cs
+index 23b7f734c..d7e09efa8 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/ChatV2SessionHistoryService.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/ChatV2SessionHistoryService.cs	
+@@ -26,6 +26,7 @@ namespace PhasePal.Services.ChatV2.Core
+         private bool _isJobSession;
+         private string _jobId = string.Empty;
+         private string _jobAlias = string.Empty;
++        public Func<string, bool> CanWriteSession { get; set; }
+         private bool _hasExplicitJobSessionState;
+ 
+         public ChatV2SessionHistoryService(
+@@ -114,6 +115,7 @@ namespace PhasePal.Services.ChatV2.Core
+ 
+         public bool RemoveMessage(ChatV2MessageId messageId)
+         {
++            if (CanWriteSession?.Invoke(_sessionId) == false) return false;
+             if (messageId.IsEmpty || _deleted)
+             {
+                 return false;
+@@ -126,6 +128,7 @@ namespace PhasePal.Services.ChatV2.Core
+ 
+         public bool SetMessageReaction(ChatV2MessageId messageId, string reaction)
+         {
++            if (CanWriteSession?.Invoke(_sessionId) == false) return false;
+             if (messageId.IsEmpty || _deleted)
+             {
+                 return false;
+@@ -165,6 +168,7 @@ namespace PhasePal.Services.ChatV2.Core
+ 
+         public bool TruncateFrom(ChatV2MessageId messageId)
+         {
++            if (CanWriteSession?.Invoke(_sessionId) == false) return false;
+             if (messageId.IsEmpty || _deleted)
+             {
+                 return false;
+@@ -390,6 +394,7 @@ namespace PhasePal.Services.ChatV2.Core
+             string title,
+             IReadOnlyList<ChatV2Message> messages)
+         {
++            if (CanWriteSession?.Invoke(sessionId) == false) return false;
+             if (string.IsNullOrWhiteSpace(characterId) ||
+                 string.IsNullOrWhiteSpace(sessionId) ||
+                 messages == null)
+@@ -645,6 +650,7 @@ namespace PhasePal.Services.ChatV2.Core
+ 
+         public void AppendToSession(string characterId, string sessionId, ChatV2Message message)
+         {
++            if (CanWriteSession?.Invoke(sessionId) == false) return;
+             if (message == null || string.IsNullOrWhiteSpace(characterId) || string.IsNullOrWhiteSpace(sessionId))
+             {
+                 return;
+@@ -683,6 +689,7 @@ namespace PhasePal.Services.ChatV2.Core
+ 
+         public bool UpdateMessage(string characterId, string sessionId, ChatV2Message message)
+         {
++            if (CanWriteSession?.Invoke(sessionId) == false) return false;
+             if (message == null || message.Id.IsEmpty ||
+                 string.IsNullOrWhiteSpace(characterId) || string.IsNullOrWhiteSpace(sessionId))
+             {
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs
+new file mode 100644
+index 000000000..818dbb2b2
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs	
+@@ -0,0 +1,34 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace PhasePal.Services.ChatV2.Core
++{
++    public sealed class ChatV2ExternalConversationInfo
++    {
++        public string SessionId { get; set; }
++        public string CharacterId { get; set; }
++        public string OriginalSessionId { get; set; }
++        public string ChatGptUrl { get; set; }
++        public bool IsLocalCopy => !string.IsNullOrEmpty(OriginalSessionId);
++    }
++
++    public interface IChatV2ExternalConversations : IDisposable
++    {
++        event Action Changed;
++        bool Enabled { get; }
++        bool Ready { get; }
++        string StatusText { get; }
++        /// <summary>Returns a pairing code only while the authenticated receiver is ready.</summary>
++        string GetConnectionCode();
++        /// <summary>Returns source ownership and navigation information for a mirrored chat or local copy.</summary>
++        ChatV2ExternalConversationInfo GetSessionInfo(string sessionId);
++        /// <summary>Allows transcript writes only for native chats and independent local copies.</summary>
++        bool CanWriteSession(string sessionId);
++        /// <summary>Changes receiver availability for the selected avatar and current data scope.</summary>
++        Task SetEnabledAsync(bool enabled, string characterId, string characterName);
++        /// <summary>Copies a synced transcript into a new writable session without changing its source.</summary>
++        Task<string> CreateLocalCopyAsync(string sessionId, string characterId, CancellationToken cancellationToken);
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationReceiver.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationReceiver.cs
+new file mode 100644
+index 000000000..21688186f
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationReceiver.cs	
+@@ -0,0 +1,190 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationReceiver.cs
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Net;
++using System.Net.Sockets;
++using System.Text;
++using System.Text.RegularExpressions;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
++
++namespace PhasePal.Services.ChatV2.Platform
++{
++    /// <summary>Bounded, authenticated loopback HTTP receiver; never invokes Unity APIs.</summary>
++    public sealed class ChatV2ExternalConversationReceiver : IDisposable
++    {
++        public const int PORT = 41771;
++        public const string PROTOCOL = "openchatlink/1";
++        private readonly TcpListener _listener = new TcpListener(IPAddress.Loopback, PORT);
++        private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
++        private readonly HashSet<TcpClient> _clients = new HashSet<TcpClient>();
++        private readonly HashSet<Task> _requests = new HashSet<Task>();
++        private readonly SemaphoreSlim _slots = new SemaphoreSlim(4, 4);
++        private readonly string _token;
++        private readonly Func<JObject, CancellationToken, Task<object>> _ingest;
++        private readonly Func<object> _health;
++        private Task _loop;
++        private int _stopped;
++
++        public ChatV2ExternalConversationReceiver(string token, Func<object> health,
++            Func<JObject, CancellationToken, Task<object>> ingest)
++        {
++            if (!Regex.IsMatch(token ?? string.Empty, "^[a-f0-9]{64}$")) throw new ArgumentException("Invalid connection credential.");
++            _token = token; _health = health; _ingest = ingest;
++        }
++
++        /// <summary>Starts bounded HTTP reception on the fixed IPv4 loopback port.</summary>
++        public void Start()
++        {
++            _listener.Start(4);
++            _loop = Task.Run(AcceptAsync);
++        }
++
++        private async Task AcceptAsync()
++        {
++            try
++            {
++                while (!_lifetime.IsCancellationRequested)
++                {
++                    await _slots.WaitAsync(_lifetime.Token).ConfigureAwait(false);
++                    TcpClient client;
++                    try { client = await _listener.AcceptTcpClientAsync().ConfigureAwait(false); }
++                    catch { _slots.Release(); throw; }
++                    lock (_clients) _clients.Add(client);
++                    Task request = HandleOwnedAsync(client);
++                    lock (_requests) _requests.Add(request);
++                    _ = request.ContinueWith(completed => {
++                        lock (_requests) _requests.Remove(completed);
++                        var ignored = completed.Exception;
++                    }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
++                }
++            }
++            catch (Exception) when (_lifetime.IsCancellationRequested) { }
++        }
++
++        private async Task HandleOwnedAsync(TcpClient client)
++        {
++            using (client)
++            using (var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token))
++            {
++                cancellation.CancelAfter(TimeSpan.FromSeconds(60));
++                try { await HandleAsync(client.GetStream(), cancellation.Token).ConfigureAwait(false); }
++                catch (Exception) { /* Client disconnect, timeout, and invalid input close this request only. */ }
++                finally { lock (_clients) _clients.Remove(client); _slots.Release(); }
++            }
++        }
++
++        private async Task HandleAsync(NetworkStream stream, CancellationToken token)
++        {
++            var headerBytes = new List<byte>();
++            var one = new byte[1];
++            while (headerBytes.Count < 16384)
++            {
++                if (await stream.ReadAsync(one, 0, 1, token).ConfigureAwait(false) == 0) return;
++                headerBytes.Add(one[0]);
++                int count = headerBytes.Count;
++                if (count >= 4 && headerBytes[count - 4] == 13 && headerBytes[count - 3] == 10 &&
++                    headerBytes[count - 2] == 13 && headerBytes[count - 1] == 10) break;
++            }
++            if (headerBytes.Count >= 16384) return;
++            string[] lines = Encoding.ASCII.GetString(headerBytes.ToArray()).Split(new[] { "\r\n" }, StringSplitOptions.None);
++            string[] request = lines[0].Split(' ');
++            if (request.Length != 3 || request[2] != "HTTP/1.1") return;
++            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
++            for (int i = 1; i < lines.Length && lines[i].Length != 0; i++)
++            {
++                int colon = lines[i].IndexOf(':');
++                if (colon <= 0 || headers.ContainsKey(lines[i].Substring(0, colon))) return;
++                headers.Add(lines[i].Substring(0, colon), lines[i].Substring(colon + 1).Trim());
++            }
++            headers.TryGetValue("Origin", out string origin);
++            if (!headers.TryGetValue("Host", out string host) || host != "127.0.0.1:" + PORT ||
++                (!string.IsNullOrEmpty(origin) && !Regex.IsMatch(origin, "^chrome-extension://[a-p]{32}$")))
++            { await RespondAsync(stream, 403, new { error = "origin_rejected" }, null, token); return; }
++            if (request[0] == "OPTIONS")
++            {
++                if (string.IsNullOrEmpty(origin)) return;
++                await RespondAsync(stream, 200, new { protocol = PROTOCOL }, origin, token); return;
++            }
++            if (!headers.TryGetValue("Authorization", out string authorization) || !Authenticate(authorization))
++            { await RespondAsync(stream, 401, new { error = "connection_revoked" }, origin, token); return; }
++            if (request[0] == "GET" && request[1] == "/openchatlink/v1/health")
++            { await RespondAsync(stream, 200, _health(), origin, token); return; }
++            if (request[0] != "POST" || request[1] != "/openchatlink/v1/ingest" ||
++                headers.ContainsKey("Transfer-Encoding") || !headers.TryGetValue("Content-Length", out string rawLength) ||
++                !int.TryParse(rawLength, out int length) || length < 1 || length > 8 * 1024 * 1024 ||
++                !headers.TryGetValue("Content-Type", out string contentType) ||
++                !contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
++            { await RespondAsync(stream, 413, new { error = "unsupported_request" }, origin, token); return; }
++            var body = new byte[length];
++            int offset = 0;
++            while (offset < length)
++            {
++                int count = await stream.ReadAsync(body, offset, length - offset, token).ConfigureAwait(false);
++                if (count == 0) return;
++                offset += count;
++            }
++            try
++            {
++                using (var text = new StringReader(new UTF8Encoding(false, true).GetString(body)))
++                using (var json = new JsonTextReader(text) { MaxDepth = 32 })
++                {
++                    JObject payload = JObject.Load(json);
++                    if (json.Read() || payload.Count != 1) throw new InvalidDataException();
++                    JObject conversation = payload["conversation"] as JObject ?? throw new InvalidDataException();
++                    object result = await _ingest(conversation, token).ConfigureAwait(false);
++                    await RespondAsync(stream, 200, result, origin, token).ConfigureAwait(false);
++                }
++            }
++            catch (OperationCanceledException) { throw; }
++            catch (Exception)
++            { await RespondAsync(stream, 400, new { error = "import_rejected" }, origin, token).ConfigureAwait(false); }
++        }
++
++        private bool Authenticate(string authorization)
++        {
++            string expected = "Bearer " + _token;
++            int difference = expected.Length ^ authorization.Length;
++            for (int i = 0; i < expected.Length; i++)
++                difference |= expected[i] ^ (i < authorization.Length ? authorization[i] : 0);
++            return difference == 0;
++        }
++
++        private static async Task RespondAsync(NetworkStream stream, int status, object result, string origin, CancellationToken token)
++        {
++            byte[] body = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(result));
++            string cors = string.IsNullOrEmpty(origin) ? string.Empty :
++                "Access-Control-Allow-Origin: " + origin + "\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\n" +
++                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\n";
++            byte[] header = Encoding.ASCII.GetBytes("HTTP/1.1 " + status + " Result\r\nContent-Type: application/json\r\n" +
++                "Content-Length: " + body.Length + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors + "\r\n");
++            await stream.WriteAsync(header, 0, header.Length, token).ConfigureAwait(false);
++            await stream.WriteAsync(body, 0, body.Length, token).ConfigureAwait(false);
++        }
++
++        /// <summary>Closes clients immediately and drains pending requests asynchronously.</summary>
++        public void Dispose()
++        {
++            if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
++            _lifetime.Cancel(); _listener.Stop();
++            lock (_clients) foreach (TcpClient client in _clients) client.Dispose();
++            _ = DrainAsync();
++        }
++
++        private async Task DrainAsync()
++        {
++            try
++            {
++                if (_loop != null) await _loop.ConfigureAwait(false);
++                Task[] requests;
++                lock (_requests) { requests = new Task[_requests.Count]; _requests.CopyTo(requests); }
++                await Task.WhenAll(requests).ConfigureAwait(false);
++            }
++            catch (Exception) { }
++            finally { _slots.Dispose(); _lifetime.Dispose(); }
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
+new file mode 100644
+index 000000000..c0bdaf4a0
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs	
+@@ -0,0 +1,190 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.IO;
++using System.Security.Cryptography;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
++using PhasePal.Security;
++using PhasePal.Services.ChatV2.Core;
++
++namespace PhasePal.Services.ChatV2.Platform
++{
++    /// <summary>ChatV2 host-owned receiver lifetime. Changes are published by Tick on Unity's thread.</summary>
++    public sealed class ChatV2ExternalConversationService : IChatV2ExternalConversations
++    {
++        private readonly ChatV2ExternalConversationStore _store;
++        private readonly IChatV2ExternalMemorySecretStore _secrets;
++        private readonly string _settingsPath;
++        private readonly string _scope;
++        private readonly SemaphoreSlim _settingsWriter = new SemaphoreSlim(1, 1);
++        private readonly ConcurrentQueue<string> _changedSessions = new ConcurrentQueue<string>();
++        private readonly CancellationTokenSource _hostLifetime = new CancellationTokenSource();
++        private ChatV2ExternalConversationReceiver _receiver;
++        private string _token, _characterId, _characterName;
++        private int _generation, _dirty;
++        private volatile bool _disposed, _historyConsent, _enabled, _suspended;
++        private string _statusText = "ChatGPT sync is off.";
++        public event Action Changed;
++        public bool Enabled => _enabled;
++        public bool Ready => _receiver != null && _enabled && !_disposed;
++        public string StatusText => _statusText;
++
++        public ChatV2ExternalConversationService(IChatV2HistoryStore history, string persistentDataPath,
++            IChatV2ExternalMemorySecretStore secrets = null)
++        {
++            _store = new ChatV2ExternalConversationStore(history, persistentDataPath);
++            _scope = ChatV2ExternalConversationStore.Hash(Path.GetFullPath(persistentDataPath)).Substring(0, 24);
++            _secrets = secrets ?? new ChatV2ExternalMemoryOsSecretStore(
++                "PhasePal.OpenChatLink." + _scope, "OpenChatLink");
++            var paths = new PhasePalOwnedPathService(persistentDataPath);
++            if (!paths.TryResolveIdentifierDirectory("Settings", out string settings) ||
++                !paths.TryResolveDirectChildFile(settings, "external_conversation_settings.json", out _settingsPath))
++                throw new IOException("External conversation settings path is unavailable.");
++        }
++
++        /// <summary>Loads scoped preferences and resumes sync while chat-history consent allows it.</summary>
++        public async Task ResumeAsync(bool historyConsent)
++        {
++            if (_disposed) return;
++            int generation = Interlocked.Increment(ref _generation);
++            _suspended = false;
++            StopReceiver();
++            _historyConsent = historyConsent;
++            try
++            {
++                JObject saved = await Task.Run(() => {
++                    _store.Initialize();
++                    return File.Exists(_settingsPath) ? JObject.Parse(File.ReadAllText(_settingsPath)) : null;
++                });
++                if (_disposed || _suspended || generation != _generation) return;
++                if (saved != null && (int?)saved["schema"] != 1) throw new InvalidDataException();
++                bool enabled = (bool?)saved?["enabled"] ?? false;
++                _enabled = enabled;
++                _characterId = (string)saved?["characterId"];
++                _characterName = (string)saved?["characterName"];
++                if (enabled && !historyConsent)
++                { _enabled = true; SetStatus("ChatGPT sync is paused because Store Chat History is off."); }
++                else if (enabled) await SetEnabledAsync(true, _characterId, _characterName);
++                else MarkChanged();
++            }
++            catch (Exception) { if (!_disposed && !_suspended) SetStatus("ChatGPT sync could not start. Check local settings and try again."); }
++        }
++
++        /// <inheritdoc />
++        public async Task SetEnabledAsync(bool enabled, string characterId, string characterName)
++        {
++            if (_disposed || _suspended) return;
++            int generation = Interlocked.Increment(ref _generation);
++            StopReceiver();
++            _enabled = enabled;
++            SetStatus(enabled ? "Connecting the Chrome extension…" : "ChatGPT sync is off.");
++            await _settingsWriter.WaitAsync(_hostLifetime.Token);
++            try
++            {
++                if (generation != _generation || _disposed || _suspended) return;
++                if (enabled && (!_historyConsent || !PhasePalOwnedPathService.IsStrictIdentifier(characterId)))
++                { _enabled = false; SetStatus("Enable Store Chat History and select an avatar before connecting."); return; }
++                _characterId = characterId; _characterName = characterName ?? string.Empty;
++                await Task.Run(() => {
++                    Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath));
++                    string temporary = _settingsPath + ".tmp";
++                    File.WriteAllText(temporary, JsonConvert.SerializeObject(new {
++                        schema = 1, enabled, characterId, characterName = _characterName }));
++                    if (File.Exists(_settingsPath)) File.Replace(temporary, _settingsPath, null);
++                    else File.Move(temporary, _settingsPath);
++                });
++                if (generation != _generation || _disposed || _suspended || (enabled && !_historyConsent)) return;
++                if (!enabled)
++                { await _secrets.DeleteAsync(); _token = null; return; }
++                if (!await Task.Run(() => _secrets.IsAvailable))
++                { SetStatus("Secure storage is unavailable. ChatGPT sync cannot start."); return; }
++                ChatV2ExternalMemorySecretLoadResult loaded = await _secrets.LoadAsync();
++                if (generation != _generation || _disposed || _suspended || !_historyConsent) return;
++                if (!loaded.Succeeded) { SetStatus("Could not read the saved connection. Try again."); return; }
++                string token = loaded.Secret;
++                if (string.IsNullOrEmpty(token))
++                {
++                    var bytes = new byte[32];
++                    using (RandomNumberGenerator random = RandomNumberGenerator.Create()) random.GetBytes(bytes);
++                    token = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
++                    if (!await _secrets.SaveAsync(token))
++                    { SetStatus("Could not save the connection securely. Try again."); return; }
++                }
++                if (generation != _generation || _disposed || _suspended || !_historyConsent) return;
++                string targetId = _characterId, targetName = _characterName;
++                _token = token;
++                _receiver = new ChatV2ExternalConversationReceiver(token,
++                    () => new { protocol = ChatV2ExternalConversationReceiver.PROTOCOL,
++                        connectionId = _scope + ":" + targetId, targetName },
++                    async (conversation, cancellation) => {
++                        if (generation != _generation || !_historyConsent) throw new OperationCanceledException();
++                        var result = await _store.ImportAsync(conversation, targetId, targetName, cancellation);
++                        if (generation == _generation && !cancellation.IsCancellationRequested)
++                        { if (result.Changed) _changedSessions.Enqueue(result.SessionId); SetStatus("ChatGPT sync is connected to " + targetName + "."); }
++                        return new { protocol = ChatV2ExternalConversationReceiver.PROTOCOL,
++                            accepted = result.Accepted, conflict = result.Conflict };
++                    });
++                _receiver.Start();
++                SetStatus("Ready. Copy the connection code into the OpenChatLink extension.");
++            }
++            catch (OperationCanceledException) { }
++            catch (Exception)
++            { StopReceiver(); SetStatus("The local sync connection could not start. Close another Phase Pal instance and try again."); }
++            finally { _settingsWriter.Release(); }
++        }
++
++        /// <inheritdoc />
++        public string GetConnectionCode()
++        {
++            if (!Ready || string.IsNullOrEmpty(_token)) return string.Empty;
++            string json = JsonConvert.SerializeObject(new { v = 1, port = ChatV2ExternalConversationReceiver.PORT, token = _token });
++            return "ocl1." + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
++        }
++
++        /// <inheritdoc />
++        public ChatV2ExternalConversationInfo GetSessionInfo(string sessionId) => _store.GetInfo(sessionId);
++        /// <inheritdoc />
++        public bool CanWriteSession(string sessionId) => _store.CanWrite(sessionId);
++        /// <inheritdoc />
++        public Task<string> CreateLocalCopyAsync(string sessionId, string characterId, CancellationToken token)
++        {
++            if (!_historyConsent) throw new InvalidOperationException("Chat history storage is disabled.");
++            return Task.Run(async () => {
++                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _hostLifetime.Token))
++                    return await _store.CreateLocalCopyAsync(sessionId, characterId, linked.Token);
++            }, token);
++        }
++
++        private void SetStatus(string text) { _statusText = text; MarkChanged(); }
++        private void MarkChanged() => Interlocked.Exchange(ref _dirty, 1);
++        /// <summary>Publishes completed imports and consent changes on the Unity thread.</summary>
++        public IReadOnlyList<string> Tick(bool historyConsent)
++        {
++            if (_historyConsent != historyConsent)
++            {
++                _historyConsent = historyConsent;
++                if (!historyConsent) { Interlocked.Increment(ref _generation); StopReceiver(); SetStatus("ChatGPT sync is paused because Store Chat History is off."); }
++                else if (_enabled && _receiver == null) _ = SetEnabledAsync(true, _characterId, _characterName);
++            }
++            List<string> changed = null;
++            while (_changedSessions.TryDequeue(out string session))
++            { if (changed == null) changed = new List<string>(); changed.Add(session); }
++            if (Interlocked.Exchange(ref _dirty, 0) != 0) Changed?.Invoke();
++            return changed == null ? (IReadOnlyList<string>)Array.Empty<string>() : changed;
++        }
++        private void StopReceiver() { _receiver?.Dispose(); _receiver = null; }
++        /// <summary>Stops reception and rejects pending startup work without changing saved preferences.</summary>
++        public void Suspend() { _suspended = true; Interlocked.Increment(ref _generation); StopReceiver(); }
++        /// <summary>Cancels the host lifetime and closes all receiver work.</summary>
++        public void Dispose()
++        {
++            if (_disposed) return;
++            _disposed = true; _hostLifetime.Cancel(); Suspend();
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
+new file mode 100644
+index 000000000..8f668fb7f
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs	
+@@ -0,0 +1,233 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Security.Cryptography;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
++using PhasePal.Security;
++using PhasePal.Services.ChatV2.Core;
++
++namespace PhasePal.Services.ChatV2.Platform
++{
++    /// <summary>Owns source snapshots and isolated local copies. Call mutations on a history worker.</summary>
++    public sealed class ChatV2ExternalConversationStore
++    {
++        private readonly IChatV2HistoryStore _history;
++        private readonly string _statePath;
++        private readonly object _recordsGate = new object();
++        private readonly SemaphoreSlim _writer = new SemaphoreSlim(1, 1);
++        private Dictionary<string, Record> _records = new Dictionary<string, Record>(StringComparer.Ordinal);
++        private volatile bool _loaded;
++
++        public sealed class Record
++        {
++            public string SessionId, CharacterId, ChatGptId, AccountId, SourceTitle, HistoryHash, OriginalSessionId;
++            public bool Deleted;
++        }
++
++        public ChatV2ExternalConversationStore(IChatV2HistoryStore history, string persistentDataPath)
++        {
++            _history = history ?? throw new ArgumentNullException(nameof(history));
++            var paths = new PhasePalOwnedPathService(persistentDataPath);
++            if (!paths.TryResolveIdentifierDirectory("Settings", out string settings) ||
++                !paths.TryResolveDirectChildFile(settings, "external_conversations.json", out _statePath))
++                throw new IOException("External conversation settings path is unavailable.");
++        }
++
++        private void Load()
++        {
++            if (_loaded) return;
++            Dictionary<string, Record> loaded = new Dictionary<string, Record>(StringComparer.Ordinal);
++            if (File.Exists(_statePath))
++            {
++                var root = JObject.Parse(File.ReadAllText(_statePath));
++                if ((int?)root["schema"] != 1) throw new InvalidDataException("Unsupported external conversation state.");
++                loaded = root["records"]?.ToObject<Dictionary<string, Record>>() ??
++                    throw new InvalidDataException("External conversation state needs recovery.");
++            }
++            lock (_recordsGate)
++            {
++                if (_loaded) return;
++                _records = loaded;
++                _loaded = true;
++            }
++        }
++
++        private void Save()
++        {
++            Dictionary<string, Record> snapshot;
++            lock (_recordsGate) snapshot = new Dictionary<string, Record>(_records, StringComparer.Ordinal);
++            string json = JsonConvert.SerializeObject(new { schema = 1, records = snapshot });
++            Directory.CreateDirectory(Path.GetDirectoryName(_statePath));
++            string temporary = _statePath + ".tmp";
++            File.WriteAllText(temporary, json);
++            if (File.Exists(_statePath)) File.Replace(temporary, _statePath, _statePath + ".bak");
++            else File.Move(temporary, _statePath);
++        }
++
++        /// <summary>Loads ownership records on a history worker.</summary>
++        public void Initialize() => Load();
++
++        /// <summary>Reads cached ownership without disk access.</summary>
++        public ChatV2ExternalConversationInfo GetInfo(string sessionId)
++        {
++            lock (_recordsGate)
++            {
++                if (!_records.TryGetValue(sessionId ?? string.Empty, out Record record) || record.Deleted) return null;
++                return new ChatV2ExternalConversationInfo { SessionId = record.SessionId,
++                    CharacterId = record.CharacterId,
++                    OriginalSessionId = record.OriginalSessionId,
++                    ChatGptUrl = "https://chatgpt.com/c/" + record.ChatGptId };
++            }
++        }
++
++        /// <summary>Protects browser-owned transcripts, including before registry initialization.</summary>
++        public bool CanWrite(string sessionId)
++        {
++            sessionId = sessionId?.Trim() ?? string.Empty;
++            if (!_loaded && (sessionId ?? string.Empty).StartsWith("ocl-", StringComparison.Ordinal)) return false;
++            ChatV2ExternalConversationInfo info = GetInfo(sessionId);
++            return info == null ? !(sessionId ?? string.Empty).StartsWith("ocl-", StringComparison.Ordinal) : info.IsLocalCopy;
++        }
++
++        /// <summary>Computes the stable local identity hash.</summary>
++        public static string Hash(string value)
++        {
++            using (SHA256 algorithm = SHA256.Create())
++                return BitConverter.ToString(algorithm.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", "").ToLowerInvariant();
++        }
++
++        /// <summary>Identifies transcript changes that must not be overwritten by sync.</summary>
++        public static string Fingerprint(IReadOnlyList<ChatV2Message> messages)
++            => Hash(JsonConvert.SerializeObject(messages.Select(m => new {
++                id = m.Id.Value, role = (int)m.Role, m.Text, m.RawText, m.Reaction,
++                createdAt = m.CreatedAt.ToUnixTimeMilliseconds(),
++                attachment = (int)m.AttachmentKind, m.AttachmentUrl
++            })));
++
++        /// <summary>Validates ordered text messages and maps them to ChatV2 history records.</summary>
++        public static IReadOnlyList<ChatV2Message> ParseMessages(JObject conversation, string sessionId,
++            string characterId, string characterName)
++        {
++            var source = conversation["messages"] as JArray;
++            if (source == null || source.Count > 20000) throw new InvalidDataException("Invalid conversation messages.");
++            var result = new List<ChatV2Message>();
++            for (int i = 0; i < source.Count; i++)
++            {
++                JObject row = source[i] as JObject ?? throw new InvalidDataException("Invalid message.");
++                if (row["index"]?.Type != JTokenType.Integer || (int)row["index"] != i ||
++                    row["text"]?.Type != JTokenType.String || row["createdAt"]?.Type != JTokenType.Integer)
++                    throw new InvalidDataException("Invalid message fields.");
++                string role = (string)row["role"];
++                if (role != "user" && role != "assistant") throw new InvalidDataException("Unsupported message role.");
++                string text = (string)row["text"];
++                if (string.IsNullOrWhiteSpace(text)) continue;
++                DateTimeOffset createdAt = DateTimeOffset.FromUnixTimeMilliseconds((long)row["createdAt"]);
++                result.Add(new ChatV2Message(ChatV2MessageId.Create(sessionId + ":legacy-" + i),
++                    role == "user" ? ChatV2MessageRole.User : ChatV2MessageRole.Assistant, text, text,
++                    createdAt: createdAt, metadata: new Dictionary<string, string> {
++                        ["openchatlink.session"] = sessionId,
++                        [ChatV2CharacterMetadata.TURN_CHARACTER_ID] = characterId,
++                        [ChatV2CharacterMetadata.TURN_CHARACTER_NAME] = characterName ?? string.Empty
++                    }));
++            }
++            return result;
++        }
++
++        /// <summary>Imports an idempotent source snapshot unless it was deleted or changed locally.</summary>
++        public async Task<(string SessionId, bool Conflict, bool Accepted, bool Changed)> ImportAsync(
++            JObject conversation, string characterId, string characterName, CancellationToken token)
++        {
++            if (!PhasePalOwnedPathService.IsStrictIdentifier(characterId)) throw new InvalidDataException("Invalid target avatar.");
++            if (!Guid.TryParse((string)conversation["id"], out Guid id)) throw new InvalidDataException("Invalid ChatGPT identity.");
++            string account = (string)conversation["accountId"] ?? "personal";
++            if (account != "personal" && !Guid.TryParse(account, out _)) throw new InvalidDataException("Invalid account identity.");
++            string sid = "ocl-" + Hash(account + "\0" + id.ToString("D") + "\0" + characterId).Substring(0, 40);
++            string title = (string)conversation["title"] ?? "ChatGPT conversation";
++            if (title.Length > 300 || conversation["updatedAt"]?.Type != JTokenType.Integer)
++                throw new InvalidDataException("Invalid conversation metadata.");
++            DateTimeOffset updatedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)conversation["updatedAt"]);
++            IReadOnlyList<ChatV2Message> incoming = ParseMessages(conversation, sid, characterId, characterName);
++            if (incoming.Count == 0) return (sid, false, false, false);
++            await _writer.WaitAsync(token).ConfigureAwait(false);
++            try
++            {
++                Load();
++                Record record;
++                lock (_recordsGate) _records.TryGetValue(sid, out record);
++                if (record?.Deleted == true) return (sid, false, false, false);
++                ChatV2SessionSummary summary = _history.GetSessionSummary(characterId, sid);
++                if (record != null && summary == null)
++                {
++                    lock (_recordsGate) record.Deleted = true;
++                    Save();
++                    return (sid, false, false, false);
++                }
++                IReadOnlyList<ChatV2Message> existing = summary == null ? Array.Empty<ChatV2Message>() :
++                    _history.LoadPage(characterId, sid, int.MaxValue);
++                string currentHash = Fingerprint(existing), incomingHash = Fingerprint(incoming);
++                // An identical retry can recover a completed file write whose registry save failed.
++                if (summary != null && currentHash != incomingHash &&
++                    (record == null || record.HistoryHash != currentHash))
++                    return (sid, true, false, false);
++                string chosenTitle = record != null && summary != null && summary.Title != record.SourceTitle
++                    ? summary.Title : title;
++                if (record != null && currentHash == incomingHash && record.SourceTitle == title)
++                    return (sid, false, true, false);
++                token.ThrowIfCancellationRequested();
++                if (currentHash != incomingHash || summary?.Title != chosenTitle)
++                {
++                    if (!_history.ImportSession(characterId, sid, chosenTitle, incoming, updatedAt, overwrite: true))
++                        throw new IOException("Conversation history could not be saved.");
++                }
++                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, CharacterId = characterId,
++                    ChatGptId = id.ToString("D"), AccountId = account, SourceTitle = title, HistoryHash = incomingHash };
++                Save();
++                return (sid, false, true, true);
++            }
++            finally { _writer.Release(); }
++        }
++
++        /// <summary>Creates a writable transcript with independent session and message identities.</summary>
++        public async Task<string> CreateLocalCopyAsync(string sessionId, string characterId, CancellationToken token)
++        {
++            await _writer.WaitAsync(token).ConfigureAwait(false);
++            try
++            {
++                Load();
++                Record original;
++                lock (_recordsGate) _records.TryGetValue(sessionId, out original);
++                if (original == null || original.Deleted || !string.IsNullOrEmpty(original.OriginalSessionId)) return sessionId;
++                var messages = _history.LoadPage(original.CharacterId, sessionId, int.MaxValue);
++                if (messages.Count == 0) throw new IOException("The synced conversation is no longer available.");
++                string sid = Guid.NewGuid().ToString("D");
++                var copies = new List<ChatV2Message>(messages.Count);
++                foreach (ChatV2Message message in messages)
++                {
++                    var metadata = new Dictionary<string, string>();
++                    foreach (var item in message.Metadata)
++                        if (!item.Key.StartsWith("openchatlink.", StringComparison.Ordinal)) metadata[item.Key] = item.Value;
++                    copies.Add(new ChatV2Message(ChatV2MessageId.Create(Guid.NewGuid().ToString("D")),
++                        message.Role, message.Text, message.RawText, message.AttachmentKind,
++                        message.AttachmentUrl, message.AttachmentPreviewUrl, createdAt: message.CreatedAt,
++                        reaction: message.Reaction, origin: message.Origin, metadata: metadata,
++                        messageParts: message.MessageParts, attachments: message.Attachments));
++                }
++                token.ThrowIfCancellationRequested();
++                string title = (_history.GetSessionSummary(original.CharacterId, sessionId)?.Title ?? "ChatGPT conversation") + " (local copy)";
++                if (!_history.ImportSession(characterId, sid, title, copies, overwrite: true))
++                    throw new IOException("Local copy could not be saved.");
++                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, CharacterId = characterId,
++                    ChatGptId = original.ChatGptId, AccountId = original.AccountId, OriginalSessionId = sessionId };
++                Save();
++                return sid;
++            }
++            finally { _writer.Release(); }
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2PlayerPrefsSettingsFacade.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2PlayerPrefsSettingsFacade.cs
+index 46bf33577..d56f88d93 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2PlayerPrefsSettingsFacade.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2PlayerPrefsSettingsFacade.cs	
+@@ -231,6 +231,14 @@ namespace PhasePal.Services.ChatV2.Platform
+         private const string CredentialTarget = "PhasePal.ChatV2.ExternalMemory.ApiKey";
+         private const string CredentialUser = "ChatV2ExternalMemory";
+ 
++        private readonly string _credentialTarget;
++        private readonly string _credentialUser;
++        public ChatV2ExternalMemoryOsSecretStore(string credentialTarget = null, string credentialUser = null)
++        {
++            _credentialTarget = credentialTarget ?? CredentialTarget;
++            _credentialUser = credentialUser ?? CredentialUser;
++        }
++
+         public bool IsAvailable
+         {
+             get
+@@ -256,14 +264,14 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+ #if UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+             MacOSKeychainLoadResult result = await MacOSKeychainSecretStore.LoadSecretAsync(
+-                CredentialTarget,
+-                CredentialUser);
++                _credentialTarget,
++                _credentialUser);
+             return result.Succeeded
+                 ? new ChatV2ExternalMemorySecretLoadResult(true, result.Secret)
+                 : new ChatV2ExternalMemorySecretLoadResult(result.NotFound, string.Empty);
+ #elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+             WindowsCredentialLoadResult result = await Task.Run(
+-                () => WindowsCredentialManager.LoadCredential(CredentialTarget));
++                () => WindowsCredentialManager.LoadCredential(_credentialTarget));
+             return new ChatV2ExternalMemorySecretLoadResult(
+                 result.Succeeded,
+                 result.Found ? result.Secret : string.Empty);
+@@ -271,8 +279,8 @@ namespace PhasePal.Services.ChatV2.Platform
+             return await Task.Run(() =>
+             {
+                 LinuxSecretServiceOperationStatus status = LinuxSecretServiceSecretStore.LoadSecretWithStatus(
+-                    CredentialTarget,
+-                    CredentialUser,
++                    _credentialTarget,
++                    _credentialUser,
+                     out string secret);
+                 return status == LinuxSecretServiceOperationStatus.Success
+                     ? new ChatV2ExternalMemorySecretLoadResult(true, secret)
+@@ -295,19 +303,19 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+ #if UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+             return await MacOSKeychainSecretStore.StoreSecretAsync(
+-                CredentialTarget,
+-                CredentialUser,
++                _credentialTarget,
++                _credentialUser,
+                 normalized);
+ #elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+             return await Task.Run(() => WindowsCredentialManager.StoreCredential(
+-                CredentialTarget,
++                _credentialTarget,
+                 normalized,
+                 WindowsCredentialPersistence.LocalMachine,
+                 CredentialUser));
+ #elif UNITY_STANDALONE_LINUX || UNITY_EDITOR_LINUX
+             return await Task.Run(() => LinuxSecretServiceSecretStore.StoreSecret(
+-                CredentialTarget,
+-                CredentialUser,
++                _credentialTarget,
++                _credentialUser,
+                 normalized));
+ #else
+             return false;
+@@ -322,12 +330,12 @@ namespace PhasePal.Services.ChatV2.Platform
+             }
+ 
+ #if UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+-            return await MacOSKeychainSecretStore.DeleteSecretAsync(CredentialTarget, CredentialUser);
++            return await MacOSKeychainSecretStore.DeleteSecretAsync(_credentialTarget, _credentialUser);
+ #elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+-            return await Task.Run(() => WindowsCredentialManager.DeleteCredential(CredentialTarget));
++            return await Task.Run(() => WindowsCredentialManager.DeleteCredential(_credentialTarget));
+ #elif UNITY_STANDALONE_LINUX || UNITY_EDITOR_LINUX
+             return await Task.Run(() => LinuxSecretServiceSecretStore.DeleteSecret(
+-                CredentialTarget,
++                _credentialTarget,
+                 CredentialUser));
+ #else
+             return false;
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeActionCoordinator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeActionCoordinator.cs
+index be77a8159..1914ca0dc 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeActionCoordinator.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeActionCoordinator.cs	
+@@ -40,6 +40,16 @@ namespace PhasePal.Services.ChatV2.Platform
+ {
+     public sealed partial class ChatV2RuntimeActionCoordinator
+     {
++        public Func<bool> CanWriteCurrentSession { get; set; }
++
++        private bool CanChangeCurrentMessage()
++        {
++            if (CanWriteCurrentSession?.Invoke() != false) return true;
++            _status.Show("This is a synced ChatGPT chat. Choose Continue in Phase Pal to edit your local copy.",
++                ChatV2StatusSeverity.Info, ChatV2StatusLifetime.Temporary, "external-conversation");
++            _refreshView();
++            return false;
++        }
+         private static readonly global::CharacterActionSFX[] CharacterSfxActions =
+         {
+             global::CharacterActionSFX.DragStart,
+@@ -7302,6 +7312,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         public void HandleReactMessageRequested(string messageId, string reaction)
+         {
++            if (!CanChangeCurrentMessage()) return;
+             if (!_messages.TryGet(new ChatV2MessageId(messageId), out ChatV2Message message))
+             {
+                 _status.Show(global::PhasePal.Services.ChatV2.Toolkit.ChatV2Localization.Resolve("ChatV2_Status_MessageNoLongerAvailable_Key", "Message is no longer available."), ChatV2StatusSeverity.Warning, ChatV2StatusLifetime.Temporary, "message-action");
+@@ -7318,6 +7329,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         public void HandleDeleteMessageRequested(string messageId)
+         {
++            if (!CanChangeCurrentMessage()) return;
+             ChatV2MessageId id = new ChatV2MessageId(messageId);
+             if (!_messages.TryGet(id, out ChatV2Message _))
+             {
+@@ -7379,6 +7391,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         public void HandleEditMessageRequested(string messageId)
+         {
++            if (!CanChangeCurrentMessage()) return;
+             if (!_messages.TryGet(new ChatV2MessageId(messageId), out ChatV2Message message) ||
+                 message.Role != ChatV2MessageRole.User)
+             {
+@@ -7394,6 +7407,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         public void HandleReloadMessageRequested(string messageId)
+         {
++            if (!CanChangeCurrentMessage()) return;
+             RunSubmitBoundaryAsync(() => _reloadMessage(messageId), "Message retry");
+         }
+ 
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeCompositionService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeCompositionService.cs
+index 7c00eeaa2..e3f21c3d8 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeCompositionService.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeCompositionService.cs	
+@@ -497,6 +497,8 @@ namespace PhasePal.Services.ChatV2.Platform
+                     if (voiceInput?.ContinueForSessionNavigation() == true)
+                         submitCoordinator?.ContinueVoiceRequestInBackground(realtimeVoiceResponse.ActiveRequestId);
+                 });
++            var externalConversations = new ChatV2ExternalConversationService(fileHistoryStore, request.PersistentDataPath);
++            history.CanWriteSession = externalConversations.CanWriteSession;
+             var onboardingGate = new ChatV2OnboardingGateService(
+                 new ChatV2OnboardingFlowFacadeAdapter(new ChatV2PlayerPrefsOnboardingFacade(request.ResolveOnboardingGateEnabled())),
+                 status);
+@@ -988,6 +990,7 @@ namespace PhasePal.Services.ChatV2.Platform
+                 SessionMessageSink = sessionMessageSink,
+                 SessionTitles = sessionTitles,
+                 HistoryCoordinator = historyCoordinator,
++                ExternalConversations = externalConversations,
+                 OnboardingGate = onboardingGate,
+                 OnboardingCoordinator = onboardingCoordinator,
+                 Appearance = appearance,
+@@ -2578,6 +2581,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+     public sealed class ChatV2RuntimeComposition
+     {
++        public ChatV2ExternalConversationService ExternalConversations { get; set; }
+         public ChatV2ToolkitShellStateService ShellState { get; set; }
+         public ChatV2RuntimeAvailabilityStore RuntimeAvailability { get; set; }
+         public ChatV2PlayerPrefsSettingsFacade Settings { get; set; }
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
+index e54922854..fe664916e 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
+@@ -147,6 +147,9 @@ namespace PhasePal.Services.ChatV2.Platform
+         private ChatV2ResearchModeCoordinator _deepResearch;
+         private ChatV2RuntimeSubmitOrchestrator _submit;
+         private ChatV2SubmitCoordinator _submitCoordinator;
++        private ChatV2ExternalConversationService _externalConversations;
++        private Task<bool> _externalCopyTask;
++        private CancellationTokenSource _externalCopyCancellation;
+         private ChatV2SubmitRequestFactory _submitRequestFactory;
+         private CancellationTokenSource _externalChatCancellation;
+         private ChatV2SessionTurnKey _externalChatTarget;
+@@ -572,6 +575,8 @@ namespace PhasePal.Services.ChatV2.Platform
+             SceneManager.sceneUnloaded -= HandleSceneUnloaded;
+             SceneManager.sceneUnloaded += HandleSceneUnloaded;
+             EnsureCollaborators();
++            ConfigureExternalConversations();
++            if (_externalConversations != null) _ = _externalConversations.ResumeAsync(ExternalHistoryConsent);
+             _avatarStatePresenter?.Start();
+             BindAvatarPresentationState();
+             BindScreensaverModeService();
+@@ -590,6 +595,8 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         private void OnDisable()
+         {
++            _externalCopyCancellation?.Cancel();
++            _externalConversations?.Suspend();
+             _runtimeActions?.CancelPendingLocalTtsAction();
+             CancelExternalChat();
+             _agentGatewayDetailsCancellation?.Cancel();
+@@ -629,6 +636,8 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+         private void OnDestroy()
+         {
++            _externalCopyCancellation?.Cancel();
++            _externalConversations?.Dispose();
+             _runtimeActions?.CancelPendingLocalTtsAction();
+             CancelExternalChat();
+             _runtimeActions?.CancelTransparencyDiagnostics();
+@@ -812,6 +821,7 @@ namespace PhasePal.Services.ChatV2.Platform
+             {
+                 QueueHistoryViewStateRefresh();
+             }
++            TickExternalConversations();
+             ApplyPendingViewStateRefresh();
+             FlushScreensaverOverlayContentRefresh();
+             CompleteFrameDiagnosticStage("ChatV2.Update.ViewState", stageStarted, captureFrameDiagnostics);
+@@ -2466,6 +2476,8 @@ namespace PhasePal.Services.ChatV2.Platform
+             _sessionMessageSink = composition.SessionMessageSink;
+             _sessionTitles = composition.SessionTitles;
+             _historyCoordinator = composition.HistoryCoordinator;
++            _externalConversations?.Dispose();
++            _externalConversations = composition.ExternalConversations;
+             _onboardingGate = composition.OnboardingGate;
+             _onboardingCoordinator = composition.OnboardingCoordinator;
+             _availabilityCoordinator = composition.AvailabilityCoordinator;
+@@ -2494,8 +2506,11 @@ namespace PhasePal.Services.ChatV2.Platform
+                 _imageGeneration.SnapshotChanged += HandleImageGenerationSnapshotChanged;
+             }
+             _submitCoordinator = composition.SubmitCoordinator;
++            if (_submitCoordinator != null) _submitCoordinator.PrepareExternalConversation = PrepareExternalConversationAsync;
+             _submitRequestFactory = composition.SubmitRequestFactory;
+             _runtimeActions = composition.RuntimeActions;
++            if (_runtimeActions != null) _runtimeActions.CanWriteCurrentSession =
++                () => _externalConversations?.CanWriteSession(_history?.Current?.SessionId) ?? true;
+             _uploadCoordinator = composition.UploadCoordinator;
+             _activationLifecycle = composition.ActivationLifecycle;
+             _voiceInput = composition.VoiceInput;
+@@ -3018,6 +3033,92 @@ namespace PhasePal.Services.ChatV2.Platform
+             previousCapture?.Stop();
+         }
+ 
++        private bool ExternalHistoryConsent => PhasePalServices.Resolve<global::ISettingsService>()?.CurrentSettings?.storeChatHistory ?? false;
++
++        private void ConfigureExternalConversations()
++        {
++            _shell?.ConfigureExternalConversations(_externalConversations, HandleExternalConversationToggle,
++                HandleExternalConversationCopy, original => _historyCoordinator?.TryOpenSession(original,
++                    _externalConversations?.GetSessionInfo(original)?.CharacterId));
++        }
++
++        private async void HandleExternalConversationToggle(bool enabled)
++        {
++            try
++            {
++                var character = _characterContext?.ResolveActiveCharacter();
++                if (_externalConversations != null)
++                    await _externalConversations.SetEnabledAsync(enabled, ResolveCurrentCharacterId(), character?.characterName);
++            }
++            catch (Exception) { ShowExternalConversationError(); }
++        }
++
++        private async void HandleExternalConversationCopy()
++        {
++            try { await PrepareExternalConversationAsync(); }
++            catch (Exception) { ShowExternalConversationError(); }
++        }
++
++        private Task<bool> PrepareExternalConversationAsync()
++        {
++            if (!isActiveAndEnabled) return Task.FromResult(false);
++            string original = _history?.Current?.SessionId;
++            ChatV2ExternalConversationInfo info = _externalConversations?.GetSessionInfo(original);
++            if (info == null || info.IsLocalCopy)
++                return Task.FromResult(_externalConversations?.CanWriteSession(original) ?? true);
++            if (_externalCopyTask == null || _externalCopyTask.IsCompleted)
++                _externalCopyTask = CreateExternalConversationCopyAsync(original);
++            return _externalCopyTask;
++        }
++
++        private async Task<bool> CreateExternalConversationCopyAsync(string original)
++        {
++            var cancellation = new CancellationTokenSource();
++            _externalCopyCancellation?.Cancel(); _externalCopyCancellation = cancellation;
++            string character = ResolveCurrentCharacterId();
++            try
++            {
++                string copy = await _externalConversations.CreateLocalCopyAsync(original, character, cancellation.Token);
++                if (cancellation.IsCancellationRequested || !isActiveAndEnabled ||
++                    _history.Current.SessionId != original || ResolveCurrentCharacterId() != character) return false;
++                var pending = new List<ChatV2Attachment>(_attachments.PendingItems);
++                bool opened = _historyCoordinator.TryOpenSession(copy, character);
++                if (opened) _attachments.ReplacePending(pending);
++                return opened;
++            }
++            catch (OperationCanceledException) { return false; }
++            catch (Exception) { ShowExternalConversationError(); return false; }
++            finally
++            {
++                if (ReferenceEquals(_externalCopyCancellation, cancellation)) _externalCopyCancellation = null;
++                cancellation.Dispose();
++            }
++        }
++
++        private void ShowExternalConversationError()
++        {
++            if (!isActiveAndEnabled) return;
++            _status?.Show("Could not prepare this synced chat. Your original chat is unchanged. Try again.",
++                ChatV2StatusSeverity.Warning, ChatV2StatusLifetime.Temporary, "external-conversation");
++            QueueHistoryViewStateRefresh();
++        }
++
++        private void TickExternalConversations()
++        {
++            if (_externalConversations == null) return;
++            IReadOnlyList<string> changed = _externalConversations.Tick(ExternalHistoryConsent);
++            if (changed.Count == 0) return;
++            foreach (string session in changed)
++                if (session == _history?.Current?.SessionId && _attachments.PendingItems.Count == 0 &&
++                    _uploadCoordinator?.HasPreparingAttachments != true &&
++                    _externalConversations.GetSessionInfo(session)?.IsLocalCopy == false)
++                {
++                    _historyCoordinator.StopHistoryHydration();
++                    _historyCoordinator.TryRefreshOpenSession(session);
++                }
++            QueueHistoryViewStateRefresh();
++        }
++
+         private void RebuildSubmitOrchestrator()
+         {
+             if (_compositionService == null)
+@@ -3062,6 +3163,7 @@ namespace PhasePal.Services.ChatV2.Platform
+                 TurnLifecycleFinished = HandleAgentGatewayPresenceTurnFinished
+             });
+ 
++            if (_submit != null) _submit.CanWriteSession = session => _externalConversations?.CanWriteSession(session) ?? true;
+             RefreshAgentGatewayPresenceRoute();
+         }
+ 
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs
+index 1a6bb87c5..b74d1cd03 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
+@@ -234,6 +234,7 @@ namespace PhasePal.Services.ChatV2.Platform
+ 
+     public sealed class ChatV2SubmitCoordinator
+     {
++        public Func<Task<bool>> PrepareExternalConversation { get; set; }
+         private const string LocalModelPersonalityNoticePlayerPrefsKey =
+             ChatV2LocalModelPreferenceKeys.PersonalityNotice;
+         private const string LocalModelPersonalityNoticeSource = "local-model-personality";
+@@ -415,6 +416,7 @@ namespace PhasePal.Services.ChatV2.Platform
+         public async Task SubmitTextAsync(string text)
+         {
+             string submittedComposerText = text ?? string.Empty;
++            if (PrepareExternalConversation != null && !await PrepareExternalConversation()) return;
+             if (!_isActive())
+             {
+                 _status.Show(global::PhasePal.Services.ChatV2.Toolkit.ChatV2Localization.Resolve("ChatV2_Status_Disabled_Key", "Chat V2 is disabled."), ChatV2StatusSeverity.Warning, ChatV2StatusLifetime.Temporary, "activation");
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs
+index 805db04dc..234353d67 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs	
+@@ -266,6 +266,7 @@ namespace PhasePal.Services.ChatV2.Runtime
+         private readonly IChatV2SessionTurnRegistry _turnRegistry;
+         private readonly Func<ChatV2SessionTurnKey> _currentTargetResolver;
+         private readonly IChatV2TurnLifecycleObserver _turnLifecycleObserver;
++        public Func<string, bool> CanWriteSession { get; set; }
+ 
+         public ChatV2RuntimeSubmitOrchestrator(
+             IChatV2ModeRouter modeRouter,
+@@ -298,6 +299,9 @@ namespace PhasePal.Services.ChatV2.Runtime
+         public ChatV2RuntimeSubmitResult Submit(ChatV2RuntimeSubmitRequest request)
+         {
+             ChatV2RuntimeSubmitRequest safeRequest = request ?? new ChatV2RuntimeSubmitRequest();
++            if (CanWriteSession?.Invoke(string.IsNullOrWhiteSpace(safeRequest.TargetSessionId)
++                ? _currentTargetResolver?.Invoke().SessionId : safeRequest.TargetSessionId) == false)
++                return Rejected("This is a synced ChatGPT chat. Choose Continue in Phase Pal to create a local copy.", ChatV2RuntimeRoute.None);
+             string requestId = string.IsNullOrWhiteSpace(safeRequest.RequestId)
+                 ? Guid.NewGuid().ToString("D")
+                 : safeRequest.RequestId.Trim();
+@@ -404,6 +408,9 @@ namespace PhasePal.Services.ChatV2.Runtime
+         {
+             cancellationToken.ThrowIfCancellationRequested();
+             ChatV2RuntimeSubmitRequest safeRequest = request ?? new ChatV2RuntimeSubmitRequest();
++            if (CanWriteSession?.Invoke(string.IsNullOrWhiteSpace(safeRequest.TargetSessionId)
++                ? _currentTargetResolver?.Invoke().SessionId : safeRequest.TargetSessionId) == false)
++                return Rejected("This is a synced ChatGPT chat. Choose Continue in Phase Pal to create a local copy.", ChatV2RuntimeRoute.None);
+             string requestId = string.IsNullOrWhiteSpace(safeRequest.RequestId)
+                 ? Guid.NewGuid().ToString("D")
+                 : safeRequest.RequestId.Trim();
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
+new file mode 100644
+index 000000000..9b2e2555e
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
+@@ -0,0 +1,81 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
++using UnityEngine;
++using UnityEngine.UIElements;
++using System;
++using PhasePal.Services.ChatV2.Core;
++
++namespace PhasePal.Services.ChatV2.Toolkit
++{
++    internal sealed class ChatV2ExternalConversationPresenter : IDisposable
++    {
++        private IChatV2ExternalConversations _service;
++        private VisualElement _group, _banner;
++        private Toggle _toggle;
++        private Label _status, _bannerText;
++        private Button _copyCode, _continueHere, _viewOriginal;
++        private string _sessionId;
++        public bool IsBound => _banner != null;
++        private static string Text(string key, string fallback) => ChatV2Localization.Resolve(key, fallback);
++        public void Bind(VisualElement root, IChatV2ExternalConversations service, Action<bool> toggle,
++            Action continueHere, Action<string> viewOriginal)
++        {
++            Dispose();
++            if (root == null || service == null) return;
++            _service = service;
++            _group = new VisualElement { name = "chat-v2-settings-external-conversations" };
++            _group.AddToClassList("chat-v2-external-settings");
++            _group.Add(new Label(Text("ChatV2_ExternalConversations_Title_Key", "External Conversations")));
++            var description = new Label(Text("ChatV2_ExternalConversations_Setup_Key",
++                "Load the OpenChatLink folder in Chrome with Developer mode. Enable sync here, then copy the connection code into the extension."));
++            description.AddToClassList("chat-v2-settings-row__description"); _group.Add(description);
++            _toggle = new Toggle(Text("ChatV2_ExternalConversations_Enable_Key", "Sync personal ChatGPT conversations"));
++            _toggle.RegisterValueChangedCallback(evt => toggle?.Invoke(evt.newValue)); _group.Add(_toggle);
++            _copyCode = new Button(() => { string code = _service?.GetConnectionCode();
++                if (!string.IsNullOrEmpty(code)) GUIUtility.systemCopyBuffer = code; })
++                { text = Text("ChatV2_ExternalConversations_CopyCode_Key", "Copy connection code") };
++            _group.Add(_copyCode);
++            _status = new Label(); _status.AddToClassList("chat-v2-settings-row__description"); _group.Add(_status);
++            root.Q<VisualElement>("chat-v2-settings-section-general")?.Add(_group);
++            _banner = new VisualElement { name = "chat-v2-external-conversation-banner" };
++            _banner.AddToClassList("chat-v2-external-banner");
++            _bannerText = new Label(); _bannerText.AddToClassList("chat-v2-external-banner-text"); _banner.Add(_bannerText);
++            var actions = new VisualElement(); actions.AddToClassList("chat-v2-external-actions");
++            _continueHere = new Button(() => continueHere?.Invoke())
++                { text = Text("ChatV2_ExternalConversations_Continue_Key", "Continue in Phase Pal") };
++            actions.Add(_continueHere);
++            actions.Add(new Button(() => { string url = _service?.GetSessionInfo(_sessionId)?.ChatGptUrl;
++                if (!string.IsNullOrEmpty(url)) Application.OpenURL(url); })
++                { text = Text("ChatV2_ExternalConversations_OpenChatGpt_Key", "Open in ChatGPT") });
++            _viewOriginal = new Button(() => { string original = _service?.GetSessionInfo(_sessionId)?.OriginalSessionId;
++                if (!string.IsNullOrEmpty(original)) viewOriginal?.Invoke(original); })
++                { text = Text("ChatV2_ExternalConversations_ViewOriginal_Key", "View synced original") };
++            actions.Add(_viewOriginal); _banner.Add(actions);
++            root.Q<VisualElement>("chat-v2-composer-wrap")?.Insert(0, _banner);
++            _service.Changed += Refresh; Refresh();
++        }
++        public void ApplySession(string sessionId) { _sessionId = sessionId; Refresh(); }
++        private void Refresh()
++        {
++            if (_service == null) return;
++            _toggle?.SetValueWithoutNotify(_service.Enabled); _copyCode?.SetEnabled(_service.Ready);
++            if (_status != null) _status.text = _service.StatusText;
++            ChatV2ExternalConversationInfo info = _service.GetSessionInfo(_sessionId);
++            if (_banner == null) return;
++            _banner.style.display = info == null ? DisplayStyle.None : DisplayStyle.Flex;
++            if (info == null) return;
++            _bannerText.text = info.IsLocalCopy
++                ? Text("ChatV2_ExternalConversations_LocalCopy_Key",
++                    "This is a local copy. Your recent messages cannot sync back to ChatGPT. You can continue here, open ChatGPT, or view the synced original.")
++                : Text("ChatV2_ExternalConversations_Synced_Key",
++                    "Synced from ChatGPT. Replies here stay in Phase Pal. Sending a message creates a local copy so the original can keep syncing.");
++            _continueHere.style.display = info.IsLocalCopy ? DisplayStyle.None : DisplayStyle.Flex;
++            _viewOriginal.style.display = info.IsLocalCopy ? DisplayStyle.Flex : DisplayStyle.None;
++        }
++        public void Dispose()
++        {
++            if (_service != null) _service.Changed -= Refresh;
++            _group?.RemoveFromHierarchy(); _banner?.RemoveFromHierarchy();
++            _group = _banner = null; _service = null;
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss
+index 8bf176b59..220830297 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss	
+@@ -1,3 +1,26 @@
++.chat-v2-external-banner {
++    padding: 8px;
++    margin-bottom: 8px;
++    border-width: 1px;
++    border-color: var(--chat-v2-border);
++    border-radius: 6px;
++}
++.chat-v2-external-banner-text {
++    white-space: normal;
++}
++.chat-v2-external-actions {
++    flex-direction: row;
++    flex-wrap: wrap;
++    margin-top: 6px;
++}
++.chat-v2-external-actions > Button {
++    margin-right: 6px;
++    margin-bottom: 4px;
++}
++.chat-v2-external-settings {
++    margin-top: 16px;
++    margin-bottom: 16px;
++}
+ .chat-v2 {
+     position: absolute;
+     left: 0;
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
+index cdc53ab40..3ec8fe819 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
+@@ -128,6 +128,11 @@ namespace PhasePal.Services.ChatV2.Toolkit
+         private readonly ChatV2CommandSuggestionPresenter _commandSuggestionPresenter = new ChatV2CommandSuggestionPresenter();
+         private readonly ChatV2ConnectorComposerPresenter _connectorComposerPresenter = new ChatV2ConnectorComposerPresenter();
+         private readonly ChatV2SettingsPanelPresenter _settingsPanelPresenter = new ChatV2SettingsPanelPresenter();
++        private readonly ChatV2ExternalConversationPresenter _externalConversationPresenter = new ChatV2ExternalConversationPresenter();
++        private IChatV2ExternalConversations _externalConversations;
++        private Action<bool> _toggleExternalConversations;
++        private Action _continueExternalConversation;
++        private Action<string> _viewExternalOriginal;
+         private readonly ChatV2KeyboardShortcutSettingsPresenter _keyboardShortcutSettingsPresenter =
+             new ChatV2KeyboardShortcutSettingsPresenter();
+         private readonly ChatV2ChangeAvatarPanelPresenter _changeAvatarPanelPresenter = new ChatV2ChangeAvatarPanelPresenter();
+@@ -944,6 +949,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             _connectorComposerPresenter.Dispose();
+             _nativePermissionPresenter?.Dispose();
+             _nativePermissionPresenter = null;
++            _externalConversationPresenter.Dispose();
+             _settingsPanelPresenter.Dispose();
+             _changeAvatarPanelPresenter.Dispose();
+             _achievementsPanelPresenter.Dispose();
+@@ -1167,6 +1173,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             if (_documentRoot == null)
+             {
+                 _transparentWindowInputRegionPublisher.Bind(null, null);
++                _externalConversationPresenter.Dispose();
+                 _root = null;
+                 _elementRefs = null;
+                 ApplyElementRefs(null);
+@@ -1381,6 +1388,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             _connectorComposerPresenter.Dispose();
+             _nativePermissionPresenter?.Dispose();
+             _nativePermissionPresenter = null;
++            _externalConversationPresenter.Dispose();
+             _settingsPanelPresenter.Dispose();
+             _changeAvatarPanelPresenter.Dispose();
+             _achievementsPanelPresenter.Dispose();
+@@ -2209,6 +2217,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+ 
+         private void EnsureSettingsPanelBound()
+         {
++            EnsureExternalConversationsBound();
+             using var ensureSettingsPanelBoundScope = EnsureSettingsPanelBoundMarker.Auto();
+ 
+             if (_root == null || _settingsPanelPresenter.IsBound)
+@@ -2811,9 +2820,28 @@ namespace PhasePal.Services.ChatV2.Toolkit
+ 
+         public void ApplySession(ChatV2SessionSummary session)
+         {
++            EnsureExternalConversationsBound();
++            _externalConversationPresenter.ApplySession(session?.SessionId);
+             _chromePresenter.ApplySession(session);
+         }
+ 
++        /// <summary>Binds external conversation settings and copy/source banner actions.</summary>
++        public void ConfigureExternalConversations(IChatV2ExternalConversations service, Action<bool> toggle,
++            Action continueHere, Action<string> viewOriginal)
++        {
++            _externalConversationPresenter.Dispose();
++            _externalConversations = service; _toggleExternalConversations = toggle;
++            _continueExternalConversation = continueHere; _viewExternalOriginal = viewOriginal;
++            EnsureExternalConversationsBound();
++        }
++
++        private void EnsureExternalConversationsBound()
++        {
++            if (!_externalConversationPresenter.IsBound && _root != null && _externalConversations != null)
++                _externalConversationPresenter.Bind(_root, _externalConversations, _toggleExternalConversations,
++                    _continueExternalConversation, _viewExternalOriginal);
++        }
++
+         public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
+         {
+             if (model == null)
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
+new file mode 100644
+index 000000000..f057c472b
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
+@@ -0,0 +1,273 @@
++// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
++using System;
++using System.IO;
++using System.Linq;
++using System.Net.Http;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json.Linq;
++using NUnit.Framework;
++using PhasePal.Services.ChatV2.Core;
++using PhasePal.Services.ChatV2.Platform;
++
++namespace PhasePal.Tests.ChatV2.EditMode
++{
++    public sealed class ChatV2ExternalConversationTests
++    {
++        private string _root;
++        private IChatV2HistoryStore _history;
++        private ChatV2ExternalConversationStore _store;
++
++        [SetUp]
++        public void SetUp()
++        {
++            _root = Path.Combine(Path.GetTempPath(), "OpenChatLinkTests_" + Guid.NewGuid().ToString("N"));
++            Directory.CreateDirectory(_root);
++            _history = new ChatV2FileHistoryStore(Path.Combine(_root, "ChatV2History"), string.Empty);
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++        }
++        [TearDown]
++        public void TearDown()
++        {
++            string resolved = Path.GetFullPath(_root);
++            string parent = Path.GetFullPath(Path.GetTempPath());
++            if (!resolved.StartsWith(parent, StringComparison.OrdinalIgnoreCase) ||
++                !Path.GetFileName(resolved).StartsWith("OpenChatLinkTests_", StringComparison.Ordinal))
++                throw new InvalidOperationException("Unexpected test directory.");
++            if (Directory.Exists(resolved)) Directory.Delete(resolved, true);
++        }
++        private static JObject Conversation(string reply = "こんにちは")
++            => new JObject {
++                ["id"] = "00000000-0000-4000-8000-000000000001", ["accountId"] = "personal",
++                ["title"] = "Reina", ["updatedAt"] = 1720000100123L,
++                ["messages"] = new JArray(
++                    new JObject { ["index"] = 0, ["role"] = "user", ["text"] = "Hello | 🌸", ["createdAt"] = 1720000000123L },
++                    new JObject { ["index"] = 1, ["role"] = "assistant", ["text"] = reply, ["createdAt"] = 1720000001456L })
++            };
++
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task ImportsActualHistoryAndIdempotentRetry(bool global)
++        {
++            if (global)
++            {
++                _history = new ChatV2GlobalHistoryStore(Path.Combine(_root, "ChatV2History"));
++                _store = new ChatV2ExternalConversationStore(_history, _root);
++            }
++            var result = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            var rows = _history.LoadPage("avatar", result.SessionId, 10);
++            Assert.That(rows.Select(row => row.Text), Is.EqualTo(new[] { "Hello | 🌸", "こんにちは" }));
++            Assert.That(rows[0].CreatedAt.ToUnixTimeMilliseconds(), Is.EqualTo(1720000000123L));
++            Assert.That(_store.CanWrite(result.SessionId), Is.False);
++            var retry = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            Assert.That(retry.SessionId, Is.EqualTo(result.SessionId));
++            Assert.That(retry.Changed, Is.False);
++            Assert.That(_history.LoadPage("avatar", result.SessionId, 10).Count, Is.EqualTo(2));
++            JObject corrected = Conversation();
++            corrected["messages"][0]["createdAt"] = 1720000000999L;
++            Assert.That((await _store.ImportAsync(corrected, "avatar", "Reina", CancellationToken.None)).Changed, Is.True);
++            Assert.That(_history.LoadPage("avatar", result.SessionId, 10)[0].CreatedAt.ToUnixTimeMilliseconds(), Is.EqualTo(1720000000999L));
++        }
++
++        [Test]
++        public async Task LocalCopyRetainsConversationAndOriginalKeepsSyncing()
++        {
++            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            string copy = await _store.CreateLocalCopyAsync(original.SessionId, "avatar", CancellationToken.None);
++            _history.SaveMessage("avatar", copy, new ChatV2Message(ChatV2MessageId.Create(null), ChatV2MessageRole.User, "Local reply"));
++            await _store.ImportAsync(Conversation("Updated in ChatGPT"), "avatar", "Reina", CancellationToken.None);
++            Assert.That(_history.LoadPage("avatar", original.SessionId, 10).Last().Text, Is.EqualTo("Updated in ChatGPT"));
++            Assert.That(_history.LoadPage("avatar", copy, 10).Select(m => m.Text),
++                Is.EqualTo(new[] { "Hello | 🌸", "こんにちは", "Local reply" }));
++            Assert.That(_store.GetInfo(copy).OriginalSessionId, Is.EqualTo(original.SessionId));
++            Assert.That(_store.CanWrite(copy), Is.True);
++        }
++
++        [Test]
++        public async Task LocalModificationIsNeverOverwritten()
++        {
++            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            _history.SaveMessage("avatar", original.SessionId,
++                new ChatV2Message(ChatV2MessageId.Create(null), ChatV2MessageRole.User, "Local change"));
++            var result = await _store.ImportAsync(Conversation("Updated"), "avatar", "Reina", CancellationToken.None);
++            Assert.That(result.Conflict, Is.True);
++            Assert.That(_history.LoadPage("avatar", original.SessionId, 10).Last().Text, Is.EqualTo("Local change"));
++        }
++
++        [Test]
++        public async Task DeletedSyncedChatsStayDeletedAfterRestart()
++        {
++            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            _history.DeleteSession("avatar", original.SessionId);
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            var result = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            Assert.That(result.Accepted, Is.False);
++            Assert.That(_history.GetSessionSummary("avatar", original.SessionId), Is.Null);
++        }
++
++        [Test]
++        public async Task CoreWritePolicyProtectsSyncedOriginalAcrossAppendAndEdits()
++        {
++            var original = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            var visible = new ChatV2SessionHistoryService(_history, () => "avatar");
++            visible.CanWriteSession = _store.CanWrite;
++            visible.LoadSession(original.SessionId, 10);
++            var first = visible.GetCurrentSessionMessages()[0];
++            visible.Append(new ChatV2Message(ChatV2MessageId.Create(null), ChatV2MessageRole.User, "blocked"));
++            Assert.That(visible.RemoveMessage(first.Id), Is.False);
++            Assert.That(visible.TruncateFrom(first.Id), Is.False);
++            Assert.That(visible.SetMessageReaction(first.Id, "heart"), Is.False);
++            Assert.That(visible.ReplaceSessionMessages("avatar", " " + original.SessionId + " ", "Overwrite",
++                new[] { new ChatV2Message(ChatV2MessageId.Create(null), ChatV2MessageRole.User, "blocked") }), Is.False);
++            Assert.That(_history.LoadPage("avatar", original.SessionId, 10).Count, Is.EqualTo(2));
++        }
++
++        [TestCase("system")]
++        [TestCase("tool")]
++        public async Task RejectsUnsupportedRolesBeforeWriting(string role)
++        {
++            JObject payload = Conversation();
++            payload["messages"][0]["role"] = role;
++            bool rejected = false;
++            try { await _store.ImportAsync(payload, "avatar", "Reina", CancellationToken.None); }
++            catch (InvalidDataException) { rejected = true; }
++            Assert.That(rejected, Is.True);
++            Assert.That(_history.ListSessions("avatar", 10), Is.Empty);
++        }
++
++        [Test]
++        public async Task PreCanceledImportDoesNotWrite()
++        {
++            using (var cancellation = new CancellationTokenSource())
++            {
++                cancellation.Cancel();
++                bool canceled = false;
++                try { await _store.ImportAsync(Conversation(), "avatar", "Reina", cancellation.Token); }
++                catch (OperationCanceledException) { canceled = true; }
++                Assert.That(canceled, Is.True);
++                Assert.That(_history.ListSessions("avatar", 10), Is.Empty);
++            }
++        }
++
++        [Test]
++        public async Task ReceiverRequiresTokenAndRejectsWebOrigins()
++        {
++            string credential = new string('a', 64);
++            using (var receiver = new ChatV2ExternalConversationReceiver(credential,
++                () => new { protocol = ChatV2ExternalConversationReceiver.PROTOCOL },
++                async (body, token) => {
++                    var result = await _store.ImportAsync(body, "avatar", "Reina", token);
++                    return new { protocol = ChatV2ExternalConversationReceiver.PROTOCOL, accepted = result.Accepted };
++                }))
++            using (var client = new HttpClient())
++            {
++                receiver.Start();
++                string endpoint = "http://127.0.0.1:41771/openchatlink/v1/health";
++                using (HttpResponseMessage unauthenticated = await client.GetAsync(endpoint))
++                    Assert.That((int)unauthenticated.StatusCode, Is.EqualTo(401));
++                using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
++                {
++                    request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + credential);
++                    request.Headers.TryAddWithoutValidation("Origin", "https://example.com");
++                    using (var response = await client.SendAsync(request))
++                        Assert.That((int)response.StatusCode, Is.EqualTo(403));
++                }
++                using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
++                {
++                    request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + credential);
++                    request.Headers.TryAddWithoutValidation("Origin", "chrome-extension://" + new string('a', 32));
++                    using (var response = await client.SendAsync(request))
++                        Assert.That((int)response.StatusCode, Is.EqualTo(200));
++                }
++                client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + credential);
++                string ingest = "http://127.0.0.1:41771/openchatlink/v1/ingest";
++                using (var body = new StringContent(new JObject { ["conversation"] = Conversation() }.ToString(), Encoding.UTF8, "application/json"))
++                using (var response = await client.PostAsync(ingest, body))
++                {
++                    Assert.That((int)response.StatusCode, Is.EqualTo(200));
++                    Assert.That((bool)JObject.Parse(await response.Content.ReadAsStringAsync())["accepted"], Is.True);
++                }
++                Assert.That(_history.ListSessions("avatar", 10).Count, Is.EqualTo(1));
++                using (var body = new StringContent("{\"conversation\":{}} {}", Encoding.UTF8, "application/json"))
++                using (var response = await client.PostAsync(ingest, body))
++                    Assert.That((int)response.StatusCode, Is.EqualTo(400));
++            }
++        }
++
++        private sealed class Secrets : IChatV2ExternalMemorySecretStore
++        {
++            public bool IsAvailable { get; set; } = true;
++            public string Secret = new string('b', 64);
++            public TaskCompletionSource<ChatV2ExternalMemorySecretLoadResult> Pending;
++            public readonly TaskCompletionSource<bool> LoadStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
++            public Task<ChatV2ExternalMemorySecretLoadResult> LoadAsync()
++            {
++                LoadStarted.TrySetResult(true);
++                return Pending?.Task ?? Task.FromResult(new ChatV2ExternalMemorySecretLoadResult(true, Secret));
++            }
++            public Task<bool> SaveAsync(string secret) { Secret = secret; return Task.FromResult(true); }
++            public Task<bool> DeleteAsync() { Secret = null; return Task.FromResult(true); }
++        }
++
++        [Test]
++        public async Task ServicePairsAndRevokesWithoutPlaintextFallback()
++        {
++            var secrets = new Secrets();
++            using (var service = new ChatV2ExternalConversationService(_history, _root, secrets))
++            {
++                await service.ResumeAsync(true);
++                Assert.That(service.Enabled, Is.False);
++                await service.SetEnabledAsync(true, "avatar", "Reina");
++                Assert.That(service.Ready, Is.True);
++                Assert.That(service.GetConnectionCode().StartsWith("ocl1."), Is.True);
++                service.Tick(false);
++                await service.ResumeAsync(false);
++                Assert.That(service.Enabled, Is.True);
++                Assert.That(service.Ready, Is.False);
++                await service.ResumeAsync(true);
++                Assert.That(service.Ready, Is.True);
++                await service.SetEnabledAsync(false, "avatar", "Reina");
++                Assert.That(service.GetConnectionCode(), Is.Empty);
++                Assert.That(service.Ready, Is.False);
++                Assert.That(secrets.Secret, Is.Null);
++            }
++        }
++
++        [Test]
++        public async Task MissingHistoryConsentOrSecureStorageCannotStartReceiver()
++        {
++            var secrets = new Secrets { IsAvailable = false };
++            using (var service = new ChatV2ExternalConversationService(_history, _root, secrets))
++            {
++                await service.ResumeAsync(false);
++                await service.SetEnabledAsync(true, "avatar", "Reina");
++                Assert.That(service.Enabled, Is.False);
++                await service.ResumeAsync(true);
++                await service.SetEnabledAsync(true, "avatar", "Reina");
++                Assert.That(service.Ready, Is.False);
++                Assert.That(service.GetConnectionCode(), Is.Empty);
++            }
++        }
++
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task SuspensionOrConsentRevocationRejectsLateCredentialCompletion(bool revokeConsent)
++        {
++            var secrets = new Secrets { Pending = new TaskCompletionSource<ChatV2ExternalMemorySecretLoadResult>(
++                TaskCreationOptions.RunContinuationsAsynchronously) };
++            using (var service = new ChatV2ExternalConversationService(_history, _root, secrets))
++            {
++                await service.ResumeAsync(true);
++                Task enabling = service.SetEnabledAsync(true, "avatar", "Reina");
++                Assert.That(await Task.WhenAny(secrets.LoadStarted.Task, Task.Delay(5000)), Is.SameAs(secrets.LoadStarted.Task));
++                if (revokeConsent) service.Tick(false);
++                else service.Suspend();
++                secrets.Pending.SetResult(new ChatV2ExternalMemorySecretLoadResult(true, secrets.Secret));
++                await enabling;
++                Assert.That(service.Ready, Is.False);
++                Assert.That(service.GetConnectionCode(), Is.Empty);
++            }
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeSubmitOrchestratorTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeSubmitOrchestratorTests.cs
+index 4e25408fe..0994c9396 100644
+--- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeSubmitOrchestratorTests.cs	
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeSubmitOrchestratorTests.cs	
+@@ -52,6 +52,23 @@ namespace PhasePal.Tests.ChatV2.EditMode
+             Assert.AreEqual(1, _custom.CallCount);
+         }
+ 
++        [TestCase(null)]
++        [TestCase("")]
++        [TestCase("ocl-synced")]
++        public async Task Submit_SyncedOriginalRejectsBeforeProviderDispatch(string explicitSession)
++        {
++            var orchestrator = new ChatV2RuntimeSubmitOrchestrator(
++                new ChatV2ModeRouter(), new ChatV2SlashCommandRouter(), new ChatV2SubmitWorkflowService(),
++                _ownership, _cloud, _local, _custom,
++                currentTargetResolver: () => new ChatV2SessionTurnKey("avatar", "ocl-synced"));
++            orchestrator.CanWriteSession = session => session != "ocl-synced";
++            var request = Request(2, "synced-submit");
++            request.TargetSessionId = explicitSession;
++            Assert.That(orchestrator.Submit(request).Accepted, Is.False);
++            Assert.That((await orchestrator.SubmitAsync(request)).Accepted, Is.False);
++            Assert.That(_cloud.CallCount + _local.CallCount + _custom.CallCount, Is.EqualTo(0));
++        }
++
+         [Test]
+         public async Task SubmitAsync_ObserverReceivesStartedAndFinishedForCompletedTurn()
+         {
+diff --git a/Phase Pal/Docs/ManagerArchitectureBlueprint.md b/Phase Pal/Docs/ManagerArchitectureBlueprint.md
+index 690d44319..62565a3a7 100644
+--- a/Phase Pal/Docs/ManagerArchitectureBlueprint.md	
++++ b/Phase Pal/Docs/ManagerArchitectureBlueprint.md	
+@@ -63,6 +63,15 @@ Assets/_PhasePal/Tests/Services/<Manager>/EditMode
+ 
+ ## Consumer Access Patterns
+ 
++### External conversation sync
++
++ChatV2RuntimeCompositionService owns the OpenChatLink receiver through the
++ChatV2RuntimeHostController lifetime, because its raw history store is also
++host-scoped. It has a Core interface for Toolkit presentation and no global
++singleton. Disable/disposal close the listener and cancel owned clients; incoming
++snapshots and local copies run on the history worker. See
++[OpenChatLinkIntegration.md](OpenChatLinkIntegration.md).
++
+ ### Windows idle-sleep ownership
+ 
+ `IKeepAwakeService` is an installer-owned application service in Platform Core.
+diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
+new file mode 100644
+index 000000000..28284e3df
+--- /dev/null
++++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
+@@ -0,0 +1,92 @@
++# OpenChatLink live conversation sync
++
++OpenChatLink's unpacked Chrome extension sends personal ChatGPT history directly
++to Phase Pal while the application is running. No hstry database, Python import
++process, or manual directory selection is needed for this flow.
++
++## User flow
++
++1. Load the OpenChatLink `phasepal-extension` folder in Chrome with Developer mode.
++2. Select the destination avatar in Phase Pal. Enable Store Chat History.
++3. In Chat Settings > General > External Conversations, enable personal ChatGPT
++   sync and copy the connection code into the extension.
++4. Chats appear in Chat History as Chrome collects them. The extension polls
++   once per minute and checkpoints large imports in batches of 50.
++5. Sending text in a synced original first creates a local copy and submits
++   through the existing ChatV2 submit coordinator. The banner explains that
++   local changes cannot sync back and offers Open in ChatGPT or View synced
++   original. Continue in Phase Pal can also create the copy before voice or edits.
++
++The original remains a browser-owned snapshot. Local copies retain their
++history independently. Imported originals reject text/voice/MCP/reload submits
++that bypass copy preparation. Core history append, update, reaction, delete
++message, and truncation paths enforce the same write policy. Whole-chat deletion,
++pinning, and title renaming remain available. Deleted mirrors are not recreated.
++Any unexpected local modification causes a conflict instead of overwrite.
++
++Incoming chats belong to the avatar selected when sync was enabled. To change
++that destination, disable sync, select another avatar, then reconnect the
++extension. Existing chats and copies keep their owners. The explicit scoped
++runtime data path separates accounts, Steam channels, and Direct data.
++
++## Ownership and lifecycle
++
++ChatV2RuntimeCompositionService creates the host-scoped
++ChatV2ExternalConversationService against its existing raw history store.
++ChatV2RuntimeHostController starts/resumes it on enable, suspends it on disable,
++and disposes it on destruction. It is not a scene singleton or a Gateway sidecar.
++This follows the existing ChatV2 host composition boundary: the history store is
++host-scoped and must not be captured by an application-wide service.
++
++Imports, registry persistence, local-copy creation, socket work, and secure
++credential operations run asynchronously outside the frame path. A single
++history writer serializes imported snapshots and local copies. Frame polling
++drains completed IDs and refreshes visible source chats only when no attachments
++are pending. An unchanged browser replay does not reload the transcript.
++Copy completion is rejected after a session, character, or host lifetime change.
++The original composer draft is retained when preparation fails.
++
++The source registry is in Settings/external_conversations.json; preferences
++are in Settings/external_conversation_settings.json. Neither contains pairing
++credentials. The existing OS credential-store adapter accepts a scoped target
++name while preserving its original External Memory defaults.
++
++## Receiver contract
++
++- TCP/HTTP binds IPv4 127.0.0.1:41771 only. A second owner cannot take the port.
++- GET /openchatlink/v1/health and POST /openchatlink/v1/ingest require the copied
++  256-bit bearer credential. The protocol marker is `openchatlink/1`.
++- The expected Host is the exact loopback host/port. Website Origins are
++  rejected. Chrome-extension Origins receive bounded CORS/preflight responses.
++- Four clients, 16 KiB headers, 8 MiB bodies, depth 32, and 60-second request
++  cancellation bound receiver work. Transfer-Encoding is rejected.
++- No caller-supplied directory, avatar ID, URL, shell command, tool call, system
++  prompt, or executable configuration is accepted.
++- The text DTO contains one ChatGPT UUID, account scope, title, timestamp, and
++  ordered user/assistant messages. System and tool roles are rejected.
++- Source identity combines the ChatGPT account, conversation, and destination
++  avatar. Replays are idempotent; local copies use independent IDs.
++
++Only text is mirrored. ChatGPT browser credentials, attachments, saved memory,
++custom GPT instructions, and model state are not imported. This is not a
++ChatGPT conversation-write API. New replies use Phase Pal's selected provider
++and its existing tool approval and cancellation policy.
++
++## Verification
++
++Four affected assemblies (Core, Runtime, Toolkit, Platform) compiled using their
++generated project source/reference lists and available Unity reference assemblies.
++No Unity process was launched.
++
++Seventeen behavior cases ran in a standalone managed harness against the production
++history store and receiver: import/replay, Unicode/timestamps, local copy/source
++independence, local conflict preservation, deleted mirrors after restart, Core
++write policy, role rejection, cancellation, HTTP ingestion/authentication/origin
++checks, secure pairing, consent revocation, late completions, and rejection before
++provider dispatch. Both character and global history stores were checked.
++Eight Node tests cover extension protocol, bounded collection checkpoints,
++personal-account and visible-text filtering, watermark ownership, and revocation.
++
++Live Chrome loading, UI rendering, scene transitions, and packaged player QA
++still require a Phase Pal build containing this integration. The unchanged
++offline importer remains available as a separate fallback.

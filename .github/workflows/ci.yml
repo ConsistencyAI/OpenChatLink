@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths-ignore:
       - 'integrations/phasepal/**'
+      - 'phasepal-extension/**'
+      - '.github/workflows/extension.yml'
       - 'openchatlink.py'
       - '.github/workflows/openchatlink.yml'
       - 'examples/openchatlink.json'
@@ -13,6 +15,8 @@ on:
   pull_request:
     paths-ignore:
       - 'integrations/phasepal/**'
+      - 'phasepal-extension/**'
+      - '.github/workflows/extension.yml'
       - 'openchatlink.py'
       - '.github/workflows/openchatlink.yml'
       - 'examples/openchatlink.json'

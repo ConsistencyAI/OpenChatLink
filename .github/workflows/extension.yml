@@ -1,0 +1,24 @@
+name: OpenChatLink Chrome extension
+on:
+  push:
+    paths: ['phasepal-extension/**', '.github/workflows/extension.yml']
+  pull_request:
+    paths: ['phasepal-extension/**', '.github/workflows/extension.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test phasepal-extension/tests/*.test.js
+      - run: node --check phasepal-extension/background.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenChatLink-Chrome-extension
+          path: phasepal-extension/
+          if-no-files-found: error

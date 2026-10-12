@@ -1,5 +1,10 @@
 # OpenChatLink: hstry to Phase Pal
 
+For the extension-first flow that syncs into a running app, use the
+[Chrome extension](../../phasepal-extension/README.md). The
+[Phase Pal source integration](LIVE_SYNC.md) adds the app setting and reply banner.
+The database importer below is the offline fallback.
+
 OpenChatLink imports selected ChatGPT conversations from this fork's hstry
 SQLite database into Phase Pal's ChatV2 history. It runs locally with Python
 3.11 or later and has no third-party Python dependencies.

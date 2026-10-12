@@ -1,8 +1,13 @@
 # OpenChatLink
 
-OpenChatLink extends [hstry](https://github.com/byteowlz/hstry) with a local,
-one-way ChatGPT history importer for Phase Pal. See the
-[Phase Pal setup and sync guide](integrations/phasepal/README.md).
+OpenChatLink extends [hstry](https://github.com/byteowlz/hstry) with automatic
+ChatGPT conversation sync for Phase Pal. Start with the
+[Chrome extension setup](phasepal-extension/README.md). It connects directly to
+an updated Phase Pal application and needs no separate import server or script.
+
+The [offline importer](integrations/phasepal/README.md) remains available as a
+fallback. Maintainers can apply the live-sync integration patch from
+`integrations/phasepal/phasepal-live-sync.patch` to the Phase Pal source tree.
 
 Run `python openchatlink.py --help` from this checkout. Python 3.11+ is required;
 the importer has no third-party Python dependencies. The upstream hstry

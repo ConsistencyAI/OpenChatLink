@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "minimum_chrome_version": "120",
+  "name": "OpenChatLink for Phase Pal",
+  "version": "0.2.0",
+  "description": "Sync your ChatGPT conversations into the running Phase Pal app.",
+  "permissions": ["alarms", "storage"],
+  "host_permissions": ["https://chatgpt.com/*", "http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "options_page": "options.html",
+  "action": {"default_title": "OpenChatLink", "default_popup": "options.html"}
+}

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenChatLink for Phase Pal</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<h1>ChatGPT → Phase Pal</h1>
+<p>Keep Phase Pal open. Your personal ChatGPT chats will sync automatically every minute.</p>
+<ol><li>In Phase Pal, open Settings → External Conversations and enable ChatGPT sync.</li>
+<li>Copy the connection code and paste it below.</li><li>Sign in at <a href="https://chatgpt.com" target="_blank" rel="noreferrer">chatgpt.com</a>.</li></ol>
+<label for="code">Phase Pal connection code</label>
+<input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="ocl1.…">
+<div class="actions"><button id="connect">Connect</button><button id="sync">Sync now</button></div>
+<p id="status" role="status">Not connected.</p>
+<p class="note">Messages sent in Phase Pal stay there. They do not sync back to ChatGPT. Phase Pal keeps a local copy when you continue a synced chat.</p>
+<details><summary>Connection options</summary><div class="actions"><button id="full">Sync all again</button><button id="disconnect">Disconnect</button></div></details>
+</main><script type="module" src="options.js"></script></body></html>
