@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openchatlink"
+version = "0.1.0"
+description = "Import hstry ChatGPT conversations into Phase Pal ChatV2 history"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = []
+
+[project.scripts]
+openchatlink = "openchatlink.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

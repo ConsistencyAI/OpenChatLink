@@ -6,3 +6,21 @@ eval/
 .vscode/
 
 node_modules/
+
+# Local OpenChatLink configuration and private history must stay off GitHub.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.test-temp/
+openchatlink.local.json
+*.local.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+ChatV2History/
+.openchatlink/
+integrations/phasepal/build/
+integrations/phasepal/dist/

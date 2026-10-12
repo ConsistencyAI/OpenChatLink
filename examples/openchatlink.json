@@ -1,0 +1,9 @@
+{
+  "hstry_db": "~/.local/share/hstry/hstry.db",
+  "history_dir": "/replace/with/your/scoped/PhasePal/ChatV2History",
+  "character_id": "replace-with-installed-avatar-id",
+  "character_name": "Reina",
+  "sources": ["chatgpt-web"],
+  "conversation_ids": [],
+  "layout": "auto"
+}

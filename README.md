@@ -1,4 +1,14 @@
-# hstry
+# OpenChatLink
+
+OpenChatLink extends [hstry](https://github.com/byteowlz/hstry) with a local,
+one-way ChatGPT history importer for Phase Pal. See the
+[Phase Pal setup and sync guide](integrations/phasepal/README.md).
+
+Run `python openchatlink.py --help` from this checkout. Python 3.11+ is required;
+the importer has no third-party Python dependencies. The upstream hstry
+collector, Chrome extension, and MIT license are retained below.
+
+## Upstream hstry
 
 One searchable SQLite database for your AI chat history. Imports conversations from coding agents (Claude Code, Codex, Pi, Cursor, Aider, ...) and web apps (ChatGPT, Claude, Gemini, Perplexity), with full-text search, export, and cross-agent session resume.
 

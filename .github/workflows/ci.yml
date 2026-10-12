@@ -3,7 +3,21 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'integrations/phasepal/**'
+      - 'openchatlink.py'
+      - '.github/workflows/openchatlink.yml'
+      - 'examples/openchatlink.json'
+      - 'README.md'
+      - '.gitignore'
   pull_request:
+    paths-ignore:
+      - 'integrations/phasepal/**'
+      - 'openchatlink.py'
+      - '.github/workflows/openchatlink.yml'
+      - 'examples/openchatlink.json'
+      - 'README.md'
+      - '.gitignore'
 
 permissions:
   contents: read
