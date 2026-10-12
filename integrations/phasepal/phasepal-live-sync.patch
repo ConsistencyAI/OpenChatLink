@@ -1125,10 +1125,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..9b2e2555e
+index 000000000..d4f4da7d1
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,101 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1155,17 +1155,37 @@ index 000000000..9b2e2555e
 +            _service = service;
 +            _group = new VisualElement { name = "chat-v2-settings-external-conversations" };
 +            _group.AddToClassList("chat-v2-external-settings");
-+            _group.Add(new Label(Text("ChatV2_ExternalConversations_Title_Key", "External Conversations")));
++            var syncRow = new VisualElement { name = "chat-v2-settings-row-external-conversations" };
++            syncRow.AddToClassList("chat-v2-settings-row");
++            var syncCopy = new VisualElement { pickingMode = PickingMode.Ignore };
++            syncCopy.AddToClassList("chat-v2-settings-row__copy");
++            var title = new Label(Text("ChatV2_ExternalConversations_Title_Key", "External Conversations"));
++            title.AddToClassList("chat-v2-settings-row__title"); syncCopy.Add(title);
 +            var description = new Label(Text("ChatV2_ExternalConversations_Setup_Key",
 +                "Load the OpenChatLink folder in Chrome with Developer mode. Enable sync here, then copy the connection code into the extension."));
-+            description.AddToClassList("chat-v2-settings-row__description"); _group.Add(description);
-+            _toggle = new Toggle(Text("ChatV2_ExternalConversations_Enable_Key", "Sync personal ChatGPT conversations"));
-+            _toggle.RegisterValueChangedCallback(evt => toggle?.Invoke(evt.newValue)); _group.Add(_toggle);
++            description.AddToClassList("chat-v2-settings-row__description"); syncCopy.Add(description);
++            syncRow.Add(syncCopy);
++            _toggle = new Toggle(Text("ChatV2_ExternalConversations_Enable_Key", "Sync personal ChatGPT conversations"))
++                { name = "chat-v2-settings-external-conversations-enabled" };
++            _toggle.AddToClassList("chat-v2-settings-toggle");
++            _toggle.RegisterValueChangedCallback(evt => toggle?.Invoke(evt.newValue)); syncRow.Add(_toggle);
++            _group.Add(syncRow);
++            var connectionRow = new VisualElement { name = "chat-v2-settings-row-external-conversation-connection" };
++            connectionRow.AddToClassList("chat-v2-settings-row");
++            var connectionCopy = new VisualElement { pickingMode = PickingMode.Ignore };
++            connectionCopy.AddToClassList("chat-v2-settings-row__copy");
++            var connectionTitle = new Label(Text("ChatV2_ExternalConversations_Connection_Key", "Chrome connection"));
++            connectionTitle.AddToClassList("chat-v2-settings-row__title"); connectionCopy.Add(connectionTitle);
++            _status = new Label(); _status.AddToClassList("chat-v2-settings-row__description"); connectionCopy.Add(_status);
++            connectionRow.Add(connectionCopy);
++            var connectionActions = new VisualElement(); connectionActions.AddToClassList("chat-v2-settings-actions");
 +            _copyCode = new Button(() => { string code = _service?.GetConnectionCode();
 +                if (!string.IsNullOrEmpty(code)) GUIUtility.systemCopyBuffer = code; })
-+                { text = Text("ChatV2_ExternalConversations_CopyCode_Key", "Copy connection code") };
-+            _group.Add(_copyCode);
-+            _status = new Label(); _status.AddToClassList("chat-v2-settings-row__description"); _group.Add(_status);
++                { name = "chat-v2-settings-external-conversations-copy-code",
++                    text = Text("ChatV2_ExternalConversations_CopyCode_Key", "Copy connection code") };
++            _copyCode.AddToClassList("chat-v2-settings-action-button");
++            _copyCode.AddToClassList("chat-v2-external-copy-code");
++            connectionActions.Add(_copyCode); connectionRow.Add(connectionActions); _group.Add(connectionRow);
 +            root.Q<VisualElement>("chat-v2-settings-section-general")?.Add(_group);
 +            _banner = new VisualElement { name = "chat-v2-external-conversation-banner" };
 +            _banner.AddToClassList("chat-v2-external-banner");
@@ -1211,10 +1231,10 @@ index 000000000..9b2e2555e
 +    }
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss
-index 8bf176b59..220830297 100644
+index 8bf176b59..96c5b1ea1 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.uss	
-@@ -1,3 +1,26 @@
+@@ -1,3 +1,29 @@
 +.chat-v2-external-banner {
 +    padding: 8px;
 +    margin-bottom: 8px;
@@ -1235,8 +1255,11 @@ index 8bf176b59..220830297 100644
 +    margin-bottom: 4px;
 +}
 +.chat-v2-external-settings {
-+    margin-top: 16px;
-+    margin-bottom: 16px;
++    flex-shrink: 0;
++}
++.chat-v2-settings-action-button.chat-v2-external-copy-code {
++    width: 176px;
++    margin-left: 0;
 +}
  .chat-v2 {
      position: absolute;
