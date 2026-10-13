@@ -103,3 +103,38 @@ export function syncError(error) {
   if (error?.name === 'TimeoutError') return 'The source request timed out. Check your connection, then retry.';
   return 'A conversation could not be read. Open the source website, then retry.';
 }
+
+// Selected sync uses saved IDs; catalog scans are reserved for the picker and all-chat mode.
+export async function syncSelected({state = {}, selected, accounts, read, push, source, report, signal, maxConversations = 50}) {
+  const start = Date.now(), allowed = new Set(accounts.map(account => account.id));
+  let processed = 0, conversations = 0, failures = 0;
+  const offset = Number.isInteger(state.selectedOffset) ? state.selectedOffset : 0;
+  if (offset < 0 || offset > selected.length) throw new Error('Saved selection changed. Save your sync options again.');
+  for (let index = offset; index < selected.length; index++) {
+    signal?.throwIfAborted();
+    if (processed >= maxConversations || (processed > 0 && Date.now() - start >= 20000))
+      return {state: {selectedOffset: index}, conversations, failures, processed, inspected: 0, hasMore: true};
+    if (processed) await sleep(400, signal);
+    const row = selected[index];
+    await report({phase: 'importing', processed});
+    let conversation, stop = false;
+    if (!allowed.has(row.accountId)) {
+      failures++;
+      await report({phase: 'error', message: 'A selected chat belongs to an account that is not available. Sign in to that account or update your selection.'});
+    } else {
+      try {conversation = await read(row);}
+      catch (error) {
+        signal?.throwIfAborted(); failures++;
+        await report({phase: 'error', message: syncError(error)});
+        stop = error instanceof RateLimitedError || error instanceof NotLoggedInError;
+      }
+    }
+    // Delivery errors must abort the batch without committing a cursor past unsaved messages.
+    processed++;
+    await report({processed});
+    if (conversation) conversations += await push(source, source, [conversation]);
+    if (stop) break;
+  }
+  // A new run refetches the selected IDs so source edits are not hidden by a saved watermark.
+  return {state: {}, conversations, failures, processed, inspected: 0, hasMore: false};
+}

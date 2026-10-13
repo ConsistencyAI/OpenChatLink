@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "120",
   "name": "OpenChatLink for Phase Pal",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Sync ChatGPT, Claude, local Codex, and Claude Code histories into Phase Pal.",
   "icons": {
     "16": "assets/openchatlink-16.png",

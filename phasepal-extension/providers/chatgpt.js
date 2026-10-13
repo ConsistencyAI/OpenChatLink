@@ -7,11 +7,12 @@ import {
   fetchJson,
   sleep,
   syncError,
+  syncSelected,
   textPart,
   thinkingPart,
   toMs,
 } from '../lib/common.js';
-import {canCollect, conversationKey, isConversationId, normalizePreferences} from '../preferences.js';
+import {canCollect, isConversationId, normalizePreferences} from '../preferences.js';
 
 const BASE = 'https://chatgpt.com';
 const PAGE_SIZE = 50;
@@ -304,16 +305,19 @@ function toParsedConversation(detail, conversationId, accountId) {
   };
 }
 
-export async function syncChatGPT({ state, push, register = async () => {}, log, report = async () => {}, personalOnly = true, signal, maxConversations = 50, preferences = {} }) {
+export async function syncChatGPT({ state = {}, push, register = async () => {}, log, report = async () => {}, personalOnly = true, signal, maxConversations = 50, preferences = {} }) {
   preferences = normalizePreferences(preferences);
   if (!canCollect(preferences)) return {state, conversations: 0};
-  const selected = new Set(preferences.selected.map(row => conversationKey(row.accountId, row.id)));
   const deadline = Date.now() + 20000;
   await report({ phase: 'discovering' });
   const token = await getAccessToken(signal);
   await report({ phase: 'discovering' });
   const accounts = (await listAccounts(token, signal)).filter(account => !personalOnly || account.isPersonal);
   if (!accounts.length) throw new Error('No personal ChatGPT account was found. Switch to your personal account and try again.');
+  if (preferences.chats === 'selected') return syncSelected({state, selected: preferences.selected, accounts,
+    source: 'chatgpt-web', push, report, signal, maxConversations,
+    read: async row => toParsedConversation(await fetchJson(`${BASE}/backend-api/conversation/${row.id}`,
+      {headers: authHeaders(token, row.accountId), signal}), row.id, row.accountId)});
   const newState = { ...state, accounts: {...state.accounts} };
   let total = 0;
   let detected = 0;
@@ -344,7 +348,7 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
       }
       inspected++;
       if (inspected === 1 || inspected % 25 === 0) await report({phase: 'scanning', inspected, processed});
-      if (!isConversationId(item.id) || (preferences.chats === 'selected' && !selected.has(conversationKey(account.id, item.id)))) continue;
+      if (!isConversationId(item.id)) continue;
       const version = toMs(item.update_time) ?? 0;
       if (seen[item.id] === version) continue;
       detected++;

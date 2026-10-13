@@ -1,3 +1,4 @@
+import {syncChatGPT} from '../providers/chatgpt.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSyncController, createSourceController, ALARM, CONTINUE} from '../sync-controller.js';
@@ -210,4 +211,30 @@ test('updating from a worker with no activity log reports the pending continuati
   assert.equal(api.state.status.running, true);
   assert.match(api.state.activity[0].message, /Updated worker loaded/);
   assert.equal(api.alarms.has(CONTINUE), true);
+});
+
+
+test('one selected ChatGPT chat reaches manual completion without a continuation alarm', async t => {
+  const before = globalThis.fetch, id = '00000000-0000-4000-8000-000000000001', feedback = [];
+  t.after(() => {globalThis.fetch = before;});
+  let details = 0;
+  globalThis.fetch = async value => {
+    const path = new URL(value).pathname;
+    let data;
+    if (path === '/api/auth/session') data = {accessToken: 'synthetic'};
+    else if (path.includes('/accounts/check')) data = {accounts: {p: {account: {account_id: 'personal', structure: 'personal'}}}};
+    else {
+      assert.equal(path, '/backend-api/conversation/' + id);
+      details++;
+      data = {current_node: 'n', mapping: {n: {message: {author: {role: 'user'}, content: {content_type: 'text', parts: ['fixture']}}}}};
+    }
+    return {ok: true, status: 200, json: async () => data};
+  };
+  const {api, controller} = setup({code, preferences: {schedule: 'manual', selected: [{accountId: 'personal', id}]}}, syncChatGPT, feedback);
+  await controller.sync();
+  assert.equal(details, 1);
+  assert.deepEqual(feedback.map(row => row.phase), ['start', 'finish']);
+  assert.equal(feedback[1].manual, true); assert.equal(feedback[1].failures, 0);
+  assert.equal(api.alarms.size, 0); assert.equal(api.state.batchPending, false);
+  assert.match(api.state.status.message, /Sync complete.*1 chats checked, 1 sent/);
 });

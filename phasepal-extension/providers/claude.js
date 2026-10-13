@@ -1,5 +1,5 @@
 // Derived from hstry's MIT-licensed Claude web collector.
-import {fetchJson, sleep, toMs, syncError} from '../lib/common.js';
+import {fetchJson, sleep, toMs, syncError, syncSelected} from '../lib/common.js';
 import {canCollect, conversationKey, isConversationId, normalizePreferences} from '../preferences.js';
 const BASE = 'https://claude.ai';
 
@@ -54,7 +54,12 @@ function parse(detail, item) {
 export async function syncClaude({state = {}, push, preferences = {}, signal, report = async () => {}, maxConversations = 50}) {
   preferences = normalizePreferences(preferences);
   if (!canCollect(preferences)) return {state: {}, conversations: 0, hasMore: false};
-  const selected = new Set(preferences.selected.map(row => conversationKey(row.accountId, row.id)));
+  if (preferences.chats === 'selected') {
+    await report({phase: 'discovering'});
+    return syncSelected({state, selected: preferences.selected, accounts: await organizations(signal),
+      source: 'claude-web', push, report, signal, maxConversations,
+      read: async row => parse(await fetchJson(`${BASE}/api/organizations/${row.accountId}/chat_conversations/${row.id}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual`, {signal}), row)});
+  }
   let cursor = state.cursor ?? null, count = 0, processed = 0, inspected = 0, failures = state.pendingFailures ?? 0, batchFailures = 0;
   const started = Date.now(), runStarted = state.runStartedMs ?? started, previous = state.lastSyncMs ?? 0, seen = new Set(state.seen ?? []);
   for (;;) {
@@ -67,7 +72,7 @@ export async function syncClaude({state = {}, push, preferences = {}, signal, re
         return {state: {cursor: {orgIndex: cursor?.orgIndex ?? 0, offset: (cursor?.offset ?? 0) + i}, seen: [...seen].slice(-5000), lastSyncMs: previous, runStartedMs: runStarted, pendingFailures: failures}, conversations: count, hasMore: true, failures: batchFailures, processed, inspected};
       inspected++;
       if (inspected === 1 || inspected % 25 === 0) await report({phase: 'scanning', inspected, processed});
-      if ((preferences.chats !== 'all' && !selected.has(key)) || seen.has(key) || (previous && item.updatedAt && item.updatedAt <= previous - 300000)) continue;
+      if (seen.has(key) || (previous && item.updatedAt && item.updatedAt <= previous - 300000)) continue;
       if (processed) await sleep(400, signal);
       await report({phase: 'importing', inspected, processed});
       let conversation;

@@ -40,66 +40,32 @@ test('personal collection checkpoints bounded runs and resumes without re-fetchi
   } finally {globalThis.fetch=fetchBefore;}
 });
 
-for (const source of ['chatgpt', 'claude']) test(`${source} bounds catalog scans and resumes when selected chats are absent`, async t => {
-  const beforeFetch = globalThis.fetch, beforeNow = Date.now;
-  let clock = 1700000000000;
-  Date.now = () => clock;
-  t.after(() => {globalThis.fetch = beforeFetch; Date.now = beforeNow;});
-  const accountId = 'aaaaaaaa-0000-4000-8000-000000000001', offsets = [];
-  const id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
+for (const source of ['chatgpt', 'claude']) test(`${source} selected sync bypasses catalogs and completes the final bounded batch`, async t => {
+  const old = globalThis.fetch, requests = [], accountId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  t.after(() => {globalThis.fetch = old;});
+  const selected = [1, 2].map(n => ({accountId, id: '00000000-0000-4000-8000-' + String(n).padStart(12, '0')}));
   globalThis.fetch = async value => {
     const url = new URL(value); let data;
     if (url.pathname.endsWith('/api/auth/session')) data = {accessToken: 'synthetic'};
-    else if (url.pathname.includes('/accounts/check')) data = {accounts: {personal: {account: {account_id: accountId, structure: 'personal'}}}};
+    else if (url.pathname.includes('/accounts/check')) data = {accounts: {p: {account: {account_id: accountId, structure: 'personal'}}}};
     else if (url.pathname === '/api/organizations') data = [{uuid: accountId}];
     else {
-      const offset = Number(url.searchParams.get('offset')); offsets.push(offset); clock += 10000;
-      const rows = offset < 150 ? Array.from({length: 50}, (_, index) => ({id: id(offset + index + 100), uuid: id(offset + index + 100), update_time: 1700000000, updated_at: '2023-11-14T22:13:20Z'})) : [];
-      data = source === 'chatgpt' ? {items: rows, total: 150} : rows;
+      assert.ok(selected.some(row => url.pathname.endsWith('/' + row.id)), 'must request a selected detail, never the catalog');
+      requests.push(url.pathname);
+      data = source === 'chatgpt' ? {current_node: 'n', mapping: {n: {message: {author: {role: 'user'}, content: {content_type: 'text', parts: ['fixture']}}}}}
+        : {chat_messages: [{sender: 'human', text: 'fixture'}]};
     }
     return {ok: true, status: 200, json: async () => data};
   };
   const collector = source === 'chatgpt' ? syncChatGPT : syncClaude;
-  let state = {}, result;
-  const progress = [];
-  for (let pass = 0; pass < 5; pass++) {
-    const started = clock;
-    result = await collector({state, preferences: {selected: [{accountId, id: id(1)}]}, log: () => {}, report: async value => progress.push(value),
-      push: async () => assert.fail('unselected chat imported')});
-    assert.ok(clock - started <= 20000);
-    state = result.state;
-    if (!result.hasMore) break;
-  }
-  assert.ok(!result.hasMore); assert.equal(result.conversations, 0);
-  assert.ok(progress.some(value => value.phase === 'scanning' && value.inspected > 0));
-  assert.deepEqual(offsets, source === 'chatgpt' ? [0, 50, 50, 100, 100] : [0, 50, 50, 100, 100, 150]);
-});
-
-for (const source of ['chatgpt', 'claude']) test(`${source} advances its cursor when a catalog request consumes the time budget`, async t => {
-  const beforeFetch = globalThis.fetch, beforeNow = Date.now;
-  let clock = 1700000000000;
-  Date.now = () => clock;
-  t.after(() => {globalThis.fetch = beforeFetch; Date.now = beforeNow;});
-  const accountId = 'aaaaaaaa-0000-4000-8000-000000000001', offsets = [];
-  const ids = [1, 2].map(number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0'));
-  globalThis.fetch = async value => {
-    const url = new URL(value); let data;
-    if (url.pathname.endsWith('/api/auth/session')) data = {accessToken: 'synthetic'};
-    else if (url.pathname.includes('/accounts/check')) data = {accounts: {personal: {account: {account_id: accountId, structure: 'personal'}}}};
-    else if (url.pathname === '/api/organizations') data = [{uuid: accountId}];
-    else {
-      const offset = Number(url.searchParams.get('offset')); offsets.push(offset); clock += 21000;
-      const rows = ids.slice(offset).map(id => ({id, uuid: id, update_time: 1700000000, updated_at: '2023-11-14T22:13:20Z'}));
-      data = source === 'chatgpt' ? {items: rows, total: 2} : rows;
-    }
-    return {ok: true, status: 200, json: async () => data};
-  };
-  const options = {preferences: {selected: [{accountId, id: '00000000-0000-4000-8000-000000000099'}]}, log: () => {}, push: async () => assert.fail('unselected chat imported')};
-  const collector = source === 'chatgpt' ? syncChatGPT : syncClaude;
-  const first = await collector({state: {}, ...options});
-  assert.equal(first.hasMore, true);
-  const second = await collector({state: first.state, ...options});
-  assert.ok(!second.hasMore); assert.deepEqual(offsets, [0, 1]);
+  const options = {preferences: {selected}, maxConversations: 1, push: async (_s, _a, rows) => rows.length};
+  const first = await collector(options);
+  assert.equal(first.hasMore, true); assert.equal(first.conversations, 1);
+  const second = await collector({...options, state: first.state});
+  assert.equal(second.hasMore, false); assert.equal(second.conversations, 1);
+  assert.equal(first.inspected + second.inspected, 0); assert.equal(new Set(requests).size, 2);
+  await collector({...options, state: second.state});
+  assert.equal(requests[0], requests[2], 'next run refetches source changes');
 });
 
 test('revocation cancels pacing without waiting for the timer',async()=>{
@@ -135,7 +101,7 @@ test('selected mode never fetches bodies for other chats or another account',asy
   try {
     let result=await syncChatGPT({state:{},preferences:{selected:[{accountId:'another-account',id:otherId},{accountId:'personal-id',id:selectedId}]},
       push:async(_source,_adapter,rows)=>rows.length,log:()=>{}});
-    assert.equal(result.conversations,1);assert.deepEqual(details,[selectedId]);
+    assert.equal(result.conversations,1);assert.equal(result.failures,1);assert.deepEqual(details,[selectedId]);
     const page=await listChatGPTConversations();
     assert.deepEqual(page.items.map(row=>row.id),[otherId,selectedId]);
     assert.deepEqual(details,[selectedId]);assert.equal(page.nextCursor,null);
@@ -150,7 +116,7 @@ test('fresh selected-only defaults perform no ChatGPT requests',async()=>{
 });
 
 
-test('ChatGPT scans past a full page without a total to find selected older chats', async t => {
+test('ChatGPT all-chat sync scans past a full page without a total', async t => {
   const before = globalThis.fetch, offsets = [];
   t.after(() => {globalThis.fetch = before;});
   const accountId = 'personal-id', id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
@@ -160,14 +126,14 @@ test('ChatGPT scans past a full page without a total to find selected older chat
     else if (url.pathname.includes('/accounts/check')) data = {accounts: {p: {account: {account_id: accountId, structure: 'personal'}}}};
     else if (url.pathname.endsWith('/conversations')) {
       const offset = Number(url.searchParams.get('offset')); offsets.push(offset);
-      data = {items: Array.from({length: offset === 0 ? 50 : 1}, (_, i) => ({id: id(offset + i + 1), update_time: 1700000000}))};
+      data = {items: Array.from({length: offset === 0 ? 50 : 1}, (_, i) => ({id: offset === 0 ? 'invalid' : id(offset + i + 1), update_time: 1700000000}))};
     } else {
       assert.ok(url.pathname.endsWith(id(51)));
       data = {current_node: 'n', mapping: {n: {message: {author: {role: 'user'}, content: {content_type: 'text', parts: ['fixture']}}}}};
     }
     return {ok: true, status: 200, json: async () => data};
   };
-  const result = await syncChatGPT({state: {}, preferences: {selected: [{accountId, id: id(51)}]},
+  const result = await syncChatGPT({state: {}, preferences: {chats: 'all'},
     push: async (_source, _adapter, chats) => chats.length, log: () => {}});
   assert.deepEqual(offsets, [0, 50]);
   assert.equal(result.conversations, 1);

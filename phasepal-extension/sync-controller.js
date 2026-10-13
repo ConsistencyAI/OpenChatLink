@@ -93,7 +93,7 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
         await api.storage.local.remove('syncRun');
       }
       await api.storage.local.set({saved: result, batchPending: result.hasMore});
-      const summary = `${run.scanned} list entries scanned, ${run.checked} chats checked, ${run.delivered} sent to Phase Pal.`;
+      const summary = `${settings.chats === 'all' ? run.scanned + ' list entries scanned, ' : ''}${run.checked} chats checked, ${run.delivered} sent to Phase Pal.`;
       await writeStatus(result.hasMore ? `${summary} Next batch in about 30 seconds; Chrome must stay open.`
         : run.failures > 0 ? `${summary} ${run.failures} reads failed. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
         : `Sync complete. ${summary}${run.delivered === 0 ? ' No new matching messages to import. Check your chat and history choices if this is unexpected.' : ''}`,

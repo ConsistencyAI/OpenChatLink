@@ -56,11 +56,11 @@ test('Claude bounded passes resume chosen chats without duplicating accepted wor
   for (let pass = 0; result.hasMore && pass < 3; pass++) result = await syncClaude({...options, state: result.state});
   assert.equal(result.hasMore, false); assert.deepEqual(received, ids);
 });
-test('failed Claude details keep the watermark for an explicit retry', async t => {
+test('failed selected Claude details do not retain a cursor that skips retries', async t => {
   mock(t, {failure: true});
   const result = await syncClaude({preferences: {selected: [{accountId: org, id: ids[0]}]},
     push: async () => assert.fail('failed detail was sent')});
-  assert.equal(result.failures, 1); assert.equal(result.state.lastSyncMs, 0);
+  assert.equal(result.failures, 1); assert.deepEqual(result.state, {});
 });
 
 test('Claude continuation retains the first batch watermark so edits during a long import are retried', async t => {
