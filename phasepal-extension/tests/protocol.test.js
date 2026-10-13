@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parsePairing, toWireConversation, createClient, collect, PROTOCOL} from '../protocol.js';
-import {snapshotKey} from '../preferences.js';
+import {snapshotKey, identifyMessages} from '../preferences.js';
 const pairing = {v:1,port:41771,token:'a'.repeat(64)};
 const code = value => 'ocl1.' + Buffer.from(JSON.stringify(value)).toString('base64url');
 const conversation = {externalId:'00000000-0000-4000-8000-000000000001',title:'Reina',createdAt:1700000000000,
@@ -35,7 +35,7 @@ test('a new app scope or avatar resets collection watermark',async()=>{
                             fetcher:async()=>ok({connectionId:'new',targetName:'Reina'})});
   assert.deepEqual(received.state,{});
   assert.equal(received.personalOnly,true);
-  assert.deepEqual(result,{connectionId:'new',filterKey:snapshotKey({}),targetName:'Reina',state:{fresh:true},count:1,hasMore:false,processed:0,inspected:0,delivered:0});
+  assert.deepEqual(result,{connectionId:'new',filterKey:snapshotKey({}),targetName:'Reina',state:{fresh:true},count:1,hasMore:false,processed:0,inspected:0,delivered:0,updated:0,unchanged:0,filtered:0,empty:0});
 });
 test('same scope resumes; a failed import never returns an advanced watermark',async()=>{
   await collect({pairing,saved:{connectionId:'same',filterKey:snapshotKey({}),state:{marker:7}},fetcher:async()=>ok({connectionId:'same'}),
@@ -70,4 +70,20 @@ test('a chat with no eligible text sends no import or deletion request',async()=
     {history:'since',sinceDate:'2099-01-01'});
   assert.equal(await client.push('chatgpt-web','chatgpt-web',[conversation]),0);
   assert.equal(requests,0);
+});
+
+test('per-chat selections send exactly the previewed messages and report filtered versus unchanged', async () => {
+  const messages = await identifyMessages([{role:'user',text:'こんにちは',createdAt:1700000000123}]);
+  const row = {accountId:'personal',id:conversation.externalId,transfer:{history:'messages',
+    capturedAt:1800000000000,includeFuture:false,messageKeys:[messages[0].key]}};
+  const payloads=[], progress=[];
+  const client = createClient(pairing,async(_url,init)=>{payloads.push(JSON.parse(init.body));return ok({accepted:true,changed:false});},
+    undefined,async value=>progress.push(value),{history:'since',sinceDate:'2099-01-01',selected:[row]});
+  await client.push('chatgpt-web','chatgpt-web',[conversation]);
+  assert.deepEqual(payloads[0].conversation.messages,[{index:0,role:'user',text:'こんにちは',createdAt:1700000000123}]);
+  assert.deepEqual(progress,[{delivered:1,updated:0,unchanged:1}]);
+  const filtered=[];
+  await createClient(pairing,async()=>assert.fail('empty selection must not write'),undefined,async change=>filtered.push(change),
+    {selected:[{...row,transfer:{...row.transfer,messageKeys:[]}}]}).push('chatgpt-web','chatgpt-web',[conversation]);
+  assert.deepEqual(filtered,[{filtered:1,empty:0}]);
 });

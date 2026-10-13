@@ -25,8 +25,11 @@ export function normalizePreferences(value = {}) {
       if (typeof row.title !== 'string' || row.title.length > 300) throw new Error('Invalid selected chat title. Reload the chat list.');
       entry.title = row.title;
     }
+    if (row.transfer !== undefined) entry.transfer = normalizeTransfer(row.transfer);
     unique.set(conversationKey(entry.accountId, entry.id), entry);
   }
+  if ([...unique.values()].reduce((total, row) => total + (row.transfer?.messageKeys.length ?? 0), 0) > 50000)
+    throw new Error('Select fewer messages. A saved source selection can contain up to 50,000 messages.');
   return {chats, selected: [...unique.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row),
           history, sinceDate, schedule};
 }
@@ -34,7 +37,7 @@ export function normalizePreferences(value = {}) {
 // Scheduling does not change a snapshot; switching auto/manual must retain its checkpoint.
 export function snapshotKey(preferences) {
   const {schedule, ...snapshot} = normalizePreferences(preferences);
-  snapshot.selected = snapshot.selected.map(({accountId, id}) => ({accountId, id}));
+  snapshot.selected = snapshot.selected.map(({title, ...row}) => row);
   return JSON.stringify(snapshot);
 }
 
@@ -47,6 +50,45 @@ export function limitMessages(messages, preferences) {
   if (preferences.history === 'since') {
     const cutoff = Date.parse(preferences.sinceDate + 'T00:00:00Z');
     return messages.filter(message => message.createdAt >= cutoff);
+  }
+  return messages;
+}
+
+export function normalizeTransfer(value) {
+  if (!value || !['all', 'last100', 'range', 'messages'].includes(value.history) ||
+      typeof value.includeFuture !== 'boolean' || !Number.isSafeInteger(value.capturedAt) || value.capturedAt <= 0 ||
+      !Array.isArray(value.messageKeys) || value.messageKeys.length > 20000 ||
+      value.messageKeys.some(key => typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key)))
+    throw new Error('Preview this chat again before saving.');
+  const sinceDate = value.sinceDate ?? '', untilDate = value.untilDate ?? '';
+  if (value.history === 'range') {
+    for (const date of [sinceDate, untilDate]) if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+        !Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date))
+      throw new Error('Choose valid dates.');
+    if (!sinceDate && !untilDate || sinceDate && untilDate && sinceDate > untilDate) throw new Error('Choose a valid date range.');
+  }
+  return {history: value.history, sinceDate, untilDate, capturedAt: value.capturedAt,
+    includeFuture: value.includeFuture, messageKeys: [...new Set(value.messageKeys)].sort()};
+}
+
+// Save fingerprints, never transcript text. A changed message must be selected again.
+export async function identifyMessages(messages) {
+  return Promise.all(messages.map(async message => ({...message, key: Array.from(new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${message.role}\n${message.createdAt}\n${message.text}`))
+  ), byte => byte.toString(16).padStart(2, '0')).join('')})));
+}
+
+export function transferMessages(messages, transfer) {
+  const keys = new Set(transfer.messageKeys);
+  return messages.filter(message => keys.has(message.key) || transfer.includeFuture && message.createdAt > transfer.capturedAt);
+}
+
+export function previewSelection(messages, history, sinceDate = '', untilDate = '') {
+  if (history === 'last100') return messages.slice(-100);
+  if (history === 'range') {
+    const start = sinceDate ? Date.parse(sinceDate + 'T00:00:00Z') : -Infinity;
+    const end = untilDate ? Date.parse(untilDate + 'T00:00:00Z') + 86400000 : Infinity;
+    return messages.filter(message => message.createdAt >= start && message.createdAt < end);
   }
   return messages;
 }

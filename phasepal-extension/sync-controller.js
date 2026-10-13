@@ -1,8 +1,8 @@
 import {syncChatGPT, listChatGPTConversations} from './providers/chatgpt.js';
 import {syncClaude, listClaudeConversations} from './providers/claude.js';
-import {collect, createClient, parsePairing} from './protocol.js';
+import {collect, createClient, parsePairing, visibleMessages} from './protocol.js';
 import {NotLoggedInError, RateLimitedError, syncError} from './lib/common.js';
-import {canCollect, normalizePreferences, snapshotKey} from './preferences.js';
+import {canCollect, normalizePreferences, snapshotKey, identifyMessages} from './preferences.js';
 
 export const ALARM = 'openchatlink-sync';
 export const CONTINUE = 'openchatlink-continue';
@@ -84,6 +84,7 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       run.checked = (run.checked ?? 0) + Math.max(result.processed, totals.processed);
       run.scanned = (run.scanned ?? 0) + Math.max(result.inspected, totals.inspected);
       run.delivered = (run.delivered ?? 0) + result.delivered;
+      for (const key of ['updated', 'unchanged', 'filtered', 'empty']) run[key] = (run[key] ?? 0) + result[key];
       run.failures = Math.min(10000, run.failures + (result.failures ?? 0));
       if (result.hasMore) {
         await feedbackClient.syncFeedback(source, 'progress', {...run, failures: 0});
@@ -96,7 +97,7 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       const summary = `${settings.chats === 'all' ? run.scanned + ' list entries scanned, ' : ''}${run.checked} chats checked, ${run.delivered} sent to Phase Pal.`;
       await writeStatus(result.hasMore ? `${summary} Next batch in about 30 seconds; Chrome must stay open.`
         : run.failures > 0 ? `${summary} ${run.failures} reads failed. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
-        : `Sync complete. ${summary}${run.delivered === 0 ? ' No new matching messages to import. Check your chat and history choices if this is unexpected.' : ''}`,
+        : `${run.updated ? run.updated + ' chats updated in Phase Pal.' : run.unchanged ? 'Your selected history is up to date.' : run.delivered ? summary : 'Nothing imported.'}${run.filtered ? ' ' + run.filtered + ' chats had no messages that match your history choices. Open Preview / choose history to change the selection.' : ''}${run.empty ? ' ' + run.empty + ' chats had no supported messages.' : ''}`,
         result.hasMore, run.failures > 0 ? 'error' : 'info',
         !result.hasMore && run.failures === 0 ? {lastSuccess: Date.now()} : {});
       await api.action.setBadgeText({text: run.failures > 0 ? '!' : ''});
@@ -141,6 +142,18 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
 
   return {
     ready, sync,
+    async preview(row) {
+      const preferences = normalizePreferences({selected: [row]});
+      let conversation;
+      const result = await collector({state: {}, preferences, personalOnly: true, maxConversations: 1,
+        register: async () => {}, log: () => {}, report: async () => {},
+        push: async (_source, _adapter, chats) => {conversation = chats[0]; return 0;}});
+      if (result.failures) throw new Error('Could not read this chat. Check your source sign-in and try again.');
+      const messages = conversation ? await identifyMessages(visibleMessages(conversation)) : [];
+      if (messages.length > 20000 || new TextEncoder().encode(JSON.stringify(messages)).length > 8 * 1024 * 1024)
+        throw new Error('This chat is too large to preview.');
+      return {messages, capturedAt: Math.max(Date.now(), ...messages.map(message => message.createdAt || 0))};
+    },
     list: cursor => catalog({cursor}),
     alarm: name => name === ALARM ? sync(false, 'auto') : name === CONTINUE ? sync(false, 'continue') : Promise.resolve(),
     connect: code => command(async () => {
@@ -210,6 +223,11 @@ export function createSourceController(api, {fetcher, collectors = {}, catalogs 
       }
     },
     async list(source, cursor) {sourceApi(source); return isLocal(source) ? (await client()).localCatalog(source, cursor) : browsers[source].list(cursor);},
+    async preview(source, row) {
+      sourceApi(source);
+      try {return isLocal(source) ? (await client()).localPreview(source, row) : await browsers[source].preview(row);}
+      catch (error) {throw new Error(/https?:\/\//.test(error.message) ? syncError(error) : error.message);}
+    },
     async save(source, preferences) {
       const scoped = sourceApi(source), settings = normalizePreferences(preferences);
       if (!isLocal(source)) return browsers[source].save(settings);

@@ -44,7 +44,7 @@
           <label for="chats">Conversations to sync</label>
           <div class="select-wrap"><select id="chats"><option value="selected">Only selected chats</option><option value="all">All personal ChatGPT chats</option></select><svg class="select-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div>
           <section id="picker" class="picker">
-            <div class="picker-toolbar"><p class="field-hint">Load titles to choose your chats. Messages are imported when you sync.</p><button id="load" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0 1 13-2l2 2M19 17a8 8 0 0 1-13 2l-2-2"/></svg>Load / refresh chats</button></div>
+            <div class="picker-toolbar"><p class="field-hint">Load titles to choose your chats. Select a chat, then preview and choose its messages.</p><button id="load" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0 1 13-2l2 2M19 17a8 8 0 0 1-13 2l-2-2"/></svg>Load / refresh chats</button></div>
             <label for="search">Search loaded chats</label>
             <div class="search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="search" type="search" placeholder="Find a conversation…"></div>
             <p id="selection-count" class="selection-count"></p>
@@ -60,10 +60,10 @@
         <div class="settings-side">
           <section class="card" aria-labelledby="history-title">
             <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/></svg></span><div><h2 id="history-title">How much history</h2></div></div>
-            <label for="history">Messages to import</label>
+            <div id="history-defaults"><label for="history">Messages to import</label>
             <div class="select-wrap"><select id="history"><option value="all">All history</option><option value="last100">Last 100 messages per chat</option><option value="since">Messages from a chosen date</option></select><svg class="select-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div>
             <div id="date-row" hidden><label for="since-date">Include messages on or after</label><input id="since-date" type="date" min="1970-01-01" aria-describedby="date-hint"><p id="date-hint" class="field-hint">From 00:00 UTC on this date.</p></div>
-            <p class="field-hint">This choice applies separately to every selected chat.</p>
+            </div><p id="history-help" class="field-hint">For each selected chat, open Preview / choose history to select messages and future updates.</p>
           </section>
 
           <section class="card" aria-labelledby="schedule-title">
@@ -75,6 +75,22 @@
         </div>
       </div>
 
+      <section id="history-preview" class="card history-preview" hidden aria-labelledby="preview-title">
+        <div class="card-heading"><div><h2 id="preview-title">Choose history</h2><p id="preview-state" class="field-hint" role="status"></p></div><button id="preview-close" class="button button-quiet" type="button">Close preview</button></div>
+        <div id="preview-controls" hidden>
+          <label for="preview-mode">History for this chat</label>
+          <div class="select-wrap"><select id="preview-mode"><option value="all">All current messages</option><option value="last100">Last 100 messages</option><option value="range">Date range</option><option value="messages">Specific messages</option></select><svg class="select-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div>
+          <div id="preview-dates" class="preview-dates" hidden><div><label for="preview-from">From (UTC, inclusive)</label><input id="preview-from" type="date" min="1970-01-01"></div><div><label for="preview-until">Through (UTC, inclusive)</label><input id="preview-until" type="date" min="1970-01-01"></div></div>
+          <label class="future-choice"><input id="preview-future" type="checkbox">Include future messages</label>
+          <p class="field-hint">Adds messages sent after this preview, including outside the date range. Otherwise, only the messages selected here transfer. Changed messages must be selected again.</p>
+          <div class="actions"><button id="preview-all" class="button button-secondary" type="button">Select all messages</button><button id="preview-none" class="button button-quiet" type="button">Clear selection</button></div>
+          <p id="preview-count" role="status"></p>
+          <div id="preview-messages" class="preview-messages" role="group" aria-label="Messages to transfer"></div>
+          <div class="actions preview-pages"><button id="preview-prev" class="button button-quiet" type="button">Previous messages</button><span id="preview-page" class="field-hint"></span><button id="preview-next" class="button button-quiet" type="button">Next messages</button></div>
+          <div class="actions"><button id="preview-apply" class="button button-primary" type="button">Use this selection</button><button id="preview-reset" class="button button-outline" type="button">Select all current history instead</button></div>
+        </div>
+      </section>
+      <p id="transfer-summary" class="transfer-summary" role="status"></p>
       <section class="save-bar" aria-label="Save and sync">
         <div class="save-main">
         <div class="save-status"><span class="status-icon" aria-hidden="true"><svg class="status-working" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/></svg><svg class="status-idle" viewBox="0 0 24 24"><path d="m8 12 3 3 5-6"/><circle cx="12" cy="12" r="9"/></svg></span><div><p id="status" role="status">Not connected.</p><p class="field-hint">Save your choices before syncing.</p></div></div>

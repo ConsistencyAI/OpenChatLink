@@ -6,6 +6,21 @@ import {PROTOCOL} from '../protocol.js';
 
 const pairing={v:1,port:41771,token:'a'.repeat(64)};
 const code='ocl1.'+Buffer.from(JSON.stringify(pairing)).toString('base64url');
+
+test('preview reads only the requested chat and never imports or saves transcript bodies', async () => {
+  const row = {accountId:'personal',id:'00000000-0000-4000-8000-000000000001'};
+  const {api,controller} = setup({},async({preferences,push})=>{
+    assert.deepEqual(preferences.selected,[row]);
+    await push('chatgpt-web','chatgpt-web',[{externalId:row.id,createdAt:1700000000000,
+      messages:[{role:'user',content:'Private preview'}]}]);
+    return {state:{},conversations:0};
+  });
+  const result = await controller.preview(row);
+  assert.equal(result.messages.length,1); assert.equal(result.messages[0].text,'Private preview');
+  assert.match(result.messages[0].key,/^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(api.state).includes('Private preview'),false);
+  assert.equal(api.state.saved,undefined);
+});
 function fakeApi(initial={}) {
   const state=structuredClone(initial), alarms=new Map();
   return {state,alarms,action:{setBadgeText:async()=>{}},
@@ -22,7 +37,7 @@ function setup(initial,collector,feedback=[]) {
   const controller=createSyncController({...api,alarms:api.alarmsApi},{collector,
     fetcher:async(url,init)=>{
       if(url.includes('/sync/')) feedback.push({phase:url.split('/').at(-1),...JSON.parse(init.body)});
-      return {ok:true,status:200,json:async()=>({protocol:PROTOCOL,connectionId:'scope',targetName:'Reina'})};
+      return {ok:true,status:200,json:async()=>({protocol:PROTOCOL,connectionId:'scope',targetName:'Reina',accepted:true,changed:true})};
     }});
   return {api,controller};
 }
@@ -169,7 +184,7 @@ test('saving preserves read counts and activity survives a continuation restart'
   assert.ok(first.api.state.activity.some(entry => /received 1 chats; 2 checked/.test(entry.message)));
   const second = setup(first.api.state, collector);
   await second.controller.alarm(CONTINUE);
-  assert.match(second.api.state.status.message, /50 list entries scanned, 4 chats checked, 2 sent/);
+  assert.match(second.api.state.status.message, /2 chats updated in Phase Pal/);
   assert.equal(second.api.state.status.running, false);
   assert.ok(second.api.state.activity.some(entry => /received 1 chats; 2 checked/.test(entry.message)));
   assert.ok(!JSON.stringify(second.api.state.activity).includes('Synthetic fixture'));
@@ -236,5 +251,5 @@ test('one selected ChatGPT chat reaches manual completion without a continuation
   assert.deepEqual(feedback.map(row => row.phase), ['start', 'finish']);
   assert.equal(feedback[1].manual, true); assert.equal(feedback[1].failures, 0);
   assert.equal(api.alarms.size, 0); assert.equal(api.state.batchPending, false);
-  assert.match(api.state.status.message, /Sync complete.*1 chats checked, 1 sent/);
+  assert.match(api.state.status.message, /1 chats updated in Phase Pal/);
 });

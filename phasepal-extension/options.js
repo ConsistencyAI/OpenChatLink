@@ -1,5 +1,6 @@
 import {WORKER_REVISION} from './worker-version.js';
 import {conversationKey, normalizePreferences} from './preferences.js';
+import {createHistoryPreview} from './history-preview.js';
 
 const el = id => document.getElementById(id);
 let workerReady = false;
@@ -43,11 +44,24 @@ el('theme').addEventListener('change', async () => {
   finally {el('theme').disabled = false;}
 });
 let selected = new Map(), rows = new Map(), cursor = null, loaded = false, listing = false, dirty = false, busy = false, source = 'chatgpt';
+let previewOpen = false;
+const preview = createHistoryPreview({request,
+  apply: row => {selected.set(conversationKey(row.accountId, row.id), row); dirty = true; visibility(); drawList();},
+  changed: open => {previewOpen = open; void renderStatus();},
+});
 function visibility() {
   el('picker').hidden = el('chats').value !== 'selected';
+  el('history-defaults').hidden = el('chats').value === 'selected';
+  el('history-help').textContent = el('chats').value === 'selected'
+    ? 'For each selected chat, open Preview / choose history to select messages and future updates.'
+    : 'This filter applies to all chats from this source, including future messages. Choose specific chats to preview their messages first.';
   el('date-row').hidden = el('history').value !== 'since';
-  el('since-date').required = el('history').value === 'since';
+  el('since-date').required = el('chats').value === 'all' && el('history').value === 'since';
   el('selection-count').textContent = `${selected.size} ${selected.size === 1 ? 'chat' : 'chats'} selected. Choices on other pages are kept.`;
+  const reviewed = [...selected.values()].filter(row => row.transfer);
+  const remaining = selected.size - reviewed.length;
+  el('transfer-summary').textContent = el('chats').value === 'all' ? 'All chats use the default history filter. Choose specific chats to preview exact messages before import.'
+    : `${reviewed.length} chats · ${reviewed.reduce((sum, row) => sum + row.transfer.messageKeys.length, 0)} selected messages${reviewed.some(row => row.transfer.includeFuture) ? ' · Future messages enabled for some chats' : ''}.${remaining ? ` Preview ${remaining} more chats before saving.` : ''}`;
 }
 function loadPreferences(value) {
   const preferences = normalizePreferences(value);
@@ -65,14 +79,22 @@ function drawList() {
   for (const [key, row] of available) {
     if (search && !row.title.toLocaleLowerCase().includes(search)) continue;
     const label = document.createElement('label'); label.className = 'chat-choice';
+    const container = document.createElement('div'); container.className = 'chat-entry';
     shown++;
     const input = document.createElement('input'); input.type = 'checkbox'; input.checked = selected.has(key);
     input.addEventListener('change', () => {
       if (input.checked) selected.set(key, {accountId: row.accountId, id: row.id, title: row.title}); else selected.delete(key);
-      dirty = true; visibility(); void renderStatus();
+      preview.close(); dirty = true; visibility(); drawList(); void renderStatus();
     });
     const title = document.createElement('span'); title.textContent = row.title;
-    label.append(input, title); el('chat-list').append(label);
+    label.append(input, title); container.append(label);
+    if (selected.has(key)) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'button button-quiet preview-chat';
+      button.textContent = selected.get(key).transfer ? 'Review history' : 'Preview / choose history';
+      button.addEventListener('click', () => preview.open(selected.get(key), {history: el('history').value, sinceDate: el('since-date').value}));
+      container.append(button);
+    }
+    el('chat-list').append(container);
   }
   el('chat-empty').hidden = shown > 0;
   el('chat-empty-title').textContent = search ? 'No matching conversations' : loaded ? 'No chats found' : 'Your chats will appear here';
@@ -114,11 +136,11 @@ async function renderStatus() {
   el('activity-empty').textContent = workerReady ? 'No activity recorded yet. Select Sync now to start.' : workerWarning;
   el('status').textContent = !workerReady ? workerWarning : dirty ? 'You have unsaved sync options. Select Save sync options.'
     : status?.message ?? (code ? 'Pairing saved. Choose chats and save your sync options.' : 'Not connected.');
-  el('sync').disabled = !workerReady || !code || Boolean(status?.running) || dirty || busy;
+  el('sync').disabled = !workerReady || !code || Boolean(status?.running) || dirty || busy || previewOpen;
   el('full').disabled = el('sync').disabled;
   el('connect').disabled = busy || !workerReady;
-  el('save').disabled = busy || !workerReady;
-  el('source').disabled = busy || listing;
+  el('save').disabled = busy || !workerReady || previewOpen;
+  el('source').disabled = busy || listing || previewOpen;
 }
 async function request(message) {
   if (!workerReady) throw new Error(workerWarning);
@@ -147,9 +169,12 @@ el('preferences').addEventListener('change', event => {
 });
 el('preferences').addEventListener('submit', event => {
   event.preventDefault();
+  if (busy || previewOpen) return;
   void act(async () => {
+    if (el('chats').value === 'selected' && [...selected.values()].some(row => !row.transfer))
+      throw new Error('Preview each selected chat and choose its messages before saving.');
     const preferences = normalizePreferences({chats: el('chats').value, selected: [...selected.values()],
-      history: el('history').value, sinceDate: el('since-date').value, schedule: el('schedule').value});
+      history: el('chats').value === 'all' ? el('history').value : 'all', sinceDate: el('since-date').value, schedule: el('schedule').value});
     await request({type: 'preferences', preferences}); dirty = false;
   });
 });
@@ -166,7 +191,7 @@ async function list(refresh) {
     el('list-status').textContent = result.available === false ? 'No local history folder was found for this source. Run a local conversation first.'
       : `${rows.size} chat ${rows.size === 1 ? 'title' : 'titles'} loaded.${cursor !== null && cursor !== undefined ? ' Load more to see older chats.' : ''}${result.failures ? ' Some files could not be listed or exceeded the size limit.' : ''}`;
   } catch (error) {el('list-status').textContent = error.message;}
-  finally {listing = false; el('load').disabled = el('more').disabled = false; el('source').disabled = busy;}
+  finally {listing = false; el('load').disabled = el('more').disabled = false; void renderStatus();}
 }
 el('load').addEventListener('click', () => list(true));
 el('more').addEventListener('click', () => list(!loaded));
@@ -183,6 +208,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 async function changeSource() {
   if (dirty) {el('source').value = source; el('status').textContent = 'Save your choices before changing source.'; return;}
   source = el('source').value;
+  preview.close();
   rows.clear(); cursor = null; loaded = false; el('search').value = ''; el('list-status').textContent = '';
   const local = source === 'codex' || source === 'claude-code';
   el('chats').options[1].textContent = source === 'chatgpt' ? 'All personal ChatGPT chats'

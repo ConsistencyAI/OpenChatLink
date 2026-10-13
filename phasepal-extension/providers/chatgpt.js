@@ -293,7 +293,7 @@ function toParsedConversation(detail, conversationId, accountId) {
   return {
     externalId: conversationId,
     title: detail?.title ?? null,
-    createdAt: toMs(detail?.create_time) ?? messages[0].createdAt ?? Date.now(),
+    createdAt: toMs(detail?.create_time) ?? messages[0].createdAt ?? 0,
     updatedAt: toMs(detail?.update_time),
     model,
     provider: 'openai',

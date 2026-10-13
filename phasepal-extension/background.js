@@ -13,6 +13,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     case 'connect': action = controller.connect(message.code); break;
     case 'preferences': action = controller.save(message.source, message.preferences); break;
     case 'list': action = controller.list(message.source, message.cursor); break;
+    case 'preview': action = controller.preview(message.source, message.row); break;
     case 'disconnect': action = controller.disconnect(); break;
     case 'sync': action = controller.sync(message.source, Boolean(message.full)); break;
     default: return;

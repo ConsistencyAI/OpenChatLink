@@ -1,5 +1,14 @@
 export const PROTOCOL = 'openchatlink/1';
-import {limitMessages, normalizePreferences, snapshotKey} from './preferences.js';
+import {limitMessages, normalizePreferences, snapshotKey, identifyMessages, transferMessages} from './preferences.js';
+
+export function visibleMessages(conversation) {
+  return (conversation.messages ?? []).filter(message => ['user', 'assistant'].includes(message.role) &&
+    typeof message.content === 'string' && message.content.trim()).map(message => ({
+      role: message.role, text: message.content,
+      createdAt: Number.isSafeInteger(message.createdAt) ? message.createdAt : conversation.createdAt,
+      ...(message.key ? {key: message.key} : {}),
+    }));
+}
 
 export function parsePairing(code) {
   if (typeof code !== 'string' || !code.startsWith('ocl1.') || code.length > 1024) {
@@ -24,14 +33,11 @@ export function toWireConversation(conversation, preferences = {}, source = 'cha
   if (typeof conversation.externalId !== 'string' || !/^[a-f0-9-]{32,36}$/i.test(conversation.externalId)) {
     throw new Error('ChatGPT returned an unsupported conversation ID.');
   }
-  const visible = (conversation.messages ?? []).filter(message =>
-    ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' && message.content.trim()
-  ).map(message => ({
-    role: message.role,
-    text: message.content,
-    createdAt: Number.isSafeInteger(message.createdAt) ? message.createdAt : conversation.createdAt,
-  }));
-  const messages = limitMessages(visible, normalizePreferences(preferences)).map((message, index) => ({index, ...message}));
+  const visible = visibleMessages(conversation), settings = normalizePreferences(preferences);
+  const transfer = settings.chats === 'selected' && settings.selected.find(row => row.id === conversation.externalId.toLowerCase() &&
+    row.accountId === (conversation.metadata?.accountId ?? 'personal'))?.transfer;
+  const messages = (transfer ? transferMessages(visible, transfer) : limitMessages(visible, settings))
+    .map(({key, ...message}, index) => ({index, ...message}));
   if (messages.length > 20000) throw new Error('This conversation is too large to sync.');
   return {
     source,
@@ -69,6 +75,7 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
     health: () => request('/health'),
     syncFeedback: (source, phase, run) => request(`/sync/${source}/${phase}`, {id: run.id, manual: run.manual, failures: run.failures ?? 0}),
     localCatalog: (source, cursor) => request(`/local/${source}/catalog?offset=${cursor ?? 0}`),
+    localPreview: (source, row) => request(`/local/${source}/preview`, {accountId: row.accountId, id: row.id}),
     localPreferences: (source, preferences) => request(`/local/${source}/preferences`, {preferences}),
     localSync: source => request(`/local/${source}/sync`, {}),
     pauseLocal: () => request('/local/codex/pause', {}),
@@ -77,15 +84,18 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
       if (!provider) throw new Error('Unsupported browser source.');
       let accepted = 0;
       for (const conversation of conversations) {
-        const payload = {conversation: toWireConversation(conversation, preferences, provider)};
-        if (!payload.conversation.messages.length) continue;
+        const visible = await identifyMessages(visibleMessages(conversation));
+        const prepared = {...conversation, messages: visible.map(({text, ...message}) => ({...message, content: text}))};
+        const payload = {conversation: toWireConversation(prepared, preferences, provider)};
+        if (!payload.conversation.messages.length) {await progress({filtered: visible.length > 0 ? 1 : 0, empty: visible.length ? 0 : 1}); continue;}
         if (new TextEncoder().encode(JSON.stringify(payload)).length > 8 * 1024 * 1024) {
           throw new Error('This conversation is too large to sync.');
         }
         const result = await request('/ingest', payload);
         if (result.conflict) throw new Error('This chat has local changes. Open it in Phase Pal and choose Continue in Phase Pal.');
         accepted += result.accepted ? 1 : 0;
-        await progress();
+        if (!result.accepted) throw new Error('Phase Pal did not accept this chat. It may have been deleted there.');
+        await progress({delivered: 1, updated: result.changed === true ? 1 : 0, unchanged: result.changed === false ? 1 : 0});
       }
       return accepted;
     },
@@ -95,15 +105,18 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
 export async function collect({pairing, preferences = {}, saved = {}, full = false, collector, fetcher, signal, report = async () => {}}) {
   preferences = normalizePreferences(preferences);
   const filterKey = snapshotKey(preferences);
-  let delivered = 0;
+  const totals = {delivered: 0, updated: 0, unchanged: 0, filtered: 0, empty: 0};
   await report({phase: 'connecting'});
-  const client = createClient(pairing, fetcher, signal, () => report({phase: 'saving', delivered: ++delivered}), preferences);
+  const client = createClient(pairing, fetcher, signal, change => {
+    for (const key of Object.keys(totals)) totals[key] += change[key] ?? 0;
+    return report({phase: change.delivered ? 'saving' : 'filtered', ...totals});
+  }, preferences);
   const health = await client.health();
   const state = !full && saved.connectionId === health.connectionId && saved.filterKey === filterKey ? saved.state ?? {} : {};
   const result = await collector({state, push: client.push, register: async () => {},
                                   log: () => {}, report, personalOnly: true, signal, maxConversations: 50, preferences});
   return {connectionId: health.connectionId, filterKey, state: result.state, count: result.conversations,
-          processed: result.processed ?? 0, inspected: result.inspected ?? 0, delivered,
+          processed: result.processed ?? 0, inspected: result.inspected ?? 0, ...totals,
           targetName: health.targetName, hasMore: Boolean(result.hasMore),
           ...(result.failures > 0 ? {failures: result.failures} : {})};
 }
