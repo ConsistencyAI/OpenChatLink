@@ -1,14 +1,29 @@
 import {syncChatGPT, listChatGPTConversations} from './providers/chatgpt.js';
 import {syncClaude, listClaudeConversations} from './providers/claude.js';
 import {collect, createClient, parsePairing} from './protocol.js';
+import {NotLoggedInError, RateLimitedError, syncError} from './lib/common.js';
 import {canCollect, normalizePreferences, snapshotKey} from './preferences.js';
 
 export const ALARM = 'openchatlink-sync';
 export const CONTINUE = 'openchatlink-continue';
 
+// Serialize each source's activity writes and bound storage; never include chat content.
+function statusWriter(api) {
+  let pending = Promise.resolve();
+  return (message, running = false, level = 'info', extra = {}) => {
+    const write = pending.then(async () => {
+      const {activity = []} = await api.storage.local.get('activity');
+      if (activity.at(-1)?.message !== message) activity.push({time: Date.now(), message, level});
+      await api.storage.local.set({status: {message, running, level, ...extra}, activity: activity.slice(-100)});
+    });
+    pending = write.catch(() => {});
+    return write;
+  };
+}
+
 export function createSyncController(api, {collector = syncChatGPT, catalog = listChatGPTConversations, fetcher, source = 'chatgpt'} = {}) {
   let operation = null, cancellation = null, generation = 0;
-  const writeStatus = (message, running = false) => api.storage.local.set({status: {message, running}});
+  const writeStatus = statusWriter(api);
   async function schedule() {
     const {code, preferences, batchPending} = await api.storage.local.get(['code', 'preferences', 'batchPending']);
     const settings = normalizePreferences(preferences);
@@ -20,8 +35,8 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
     else await api.alarms.clear(CONTINUE);
   }
   const ready = (async () => {
-    const {status} = await api.storage.local.get('status');
-    if (status?.running) await writeStatus('Ready to resume sync.');
+    const {status, batchPending} = await api.storage.local.get(['status', 'batchPending']);
+    if (status?.running) await writeStatus(batchPending ? 'Waiting for the next batch; Chrome must stay open.' : 'The previous sync was interrupted. Select Sync now to retry.', Boolean(batchPending));
     await schedule();
   })();
 
@@ -37,22 +52,37 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       cancellation = new AbortController();
       feedbackClient = createClient(parsePairing(code), fetcher);
       if (trigger === 'manual' && syncRun) await feedbackClient.syncFeedback(source, 'cancel', {...syncRun, failures: 0});
-      run = trigger !== 'manual' && batchPending && syncRun ? syncRun : {id: crypto.randomUUID(), manual: trigger === 'manual', failures: 0};
+      run = trigger !== 'manual' && batchPending && syncRun ? syncRun : {id: crypto.randomUUID(), manual: trigger === 'manual', failures: 0, checked: 0, scanned: 0, delivered: 0};
       await api.storage.local.set({syncRun: run});
       await feedbackClient.syncFeedback(source, 'start', {...run, failures: 0});
       let heartbeat = Date.now();
-      await writeStatus('Syncing your chosen history…', true);
+      const totals = {processed: 0, inspected: 0, delivered: 0};
+      await writeStatus(batchPending && trigger !== 'manual' ? 'Resuming the next batch…' : 'Starting sync…', true);
       const result = await collect({pairing: parsePairing(code), preferences: settings, saved, full,
         collector, fetcher, signal: cancellation.signal,
         report: async progress => {
           if (owner !== generation) return;
-          await writeStatus(`Syncing: ${progress.processed ?? 0} conversations checked…`, true);
+          for (const key of Object.keys(totals)) if (Number.isFinite(progress[key])) totals[key] = Math.max(totals[key], progress[key]);
+          const checked = (run.checked ?? 0) + totals.processed, scanned = (run.scanned ?? 0) + totals.inspected;
+          const delivered = (run.delivered ?? 0) + totals.delivered;
+          const stage = progress.phase === 'connecting' ? 'Checking the Phase Pal connection…'
+            : progress.phase === 'discovering' ? 'Checking your browser sign-in and accounts…'
+            : progress.phase === 'scanning' ? `Scanning chat list: ${scanned} entries scanned, ${checked} chats checked…`
+            : progress.phase === 'saving' ? `Phase Pal received ${delivered} chats; ${checked} checked…`
+            : progress.phase === 'error' ? progress.message
+            : `Reading conversations: ${checked} checked, ${delivered} sent to Phase Pal…`;
+          await writeStatus(stage, true, progress.phase === 'error' ? 'error' : 'info');
           if (Date.now() - heartbeat >= 5000) {
             await feedbackClient.syncFeedback(source, 'progress', {...run, failures: 0}); heartbeat = Date.now();
           }
         },
       });
       if (owner !== generation) return;
+      if (result.hasMore && JSON.stringify(result.state) === JSON.stringify(saved?.state ?? {}))
+        throw new Error('Sync stopped because the source returned the same batch. Refresh the chat list, then retry.');
+      run.checked = (run.checked ?? 0) + Math.max(result.processed, totals.processed);
+      run.scanned = (run.scanned ?? 0) + Math.max(result.inspected, totals.inspected);
+      run.delivered = (run.delivered ?? 0) + result.delivered;
       run.failures = Math.min(10000, run.failures + (result.failures ?? 0));
       if (result.hasMore) {
         await feedbackClient.syncFeedback(source, 'progress', {...run, failures: 0});
@@ -61,12 +91,14 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
         await feedbackClient.syncFeedback(source, 'finish', run);
         await api.storage.local.remove('syncRun');
       }
-      await api.storage.local.set({saved: result, batchPending: result.hasMore, status: {running: false,
-        message: result.failures > 0 ? `Some chats could not be read. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
-          : result.hasMore ? 'Sync is continuing with the next batch…'
-          : `Synced ${result.count} conversations in this batch. New chats go to ${result.targetName || 'Phase Pal'}.`,
-        ...(result.failures > 0 ? {} : {lastSuccess: Date.now()})}});
-      await api.action.setBadgeText({text: result.failures > 0 ? '!' : ''});
+      await api.storage.local.set({saved: result, batchPending: result.hasMore});
+      const summary = `${run.scanned} list entries scanned, ${run.checked} chats checked, ${run.delivered} sent to Phase Pal.`;
+      await writeStatus(result.hasMore ? `${summary} Next batch in about 30 seconds; Chrome must stay open.`
+        : run.failures > 0 ? `${summary} ${run.failures} reads failed. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
+        : `Sync complete. ${summary}${run.delivered === 0 ? ' No new matching messages to import. Check your chat and history choices if this is unexpected.' : ''}`,
+        result.hasMore, run.failures > 0 ? 'error' : 'info',
+        !result.hasMore && run.failures === 0 ? {lastSuccess: Date.now()} : {});
+      await api.action.setBadgeText({text: run.failures > 0 ? '!' : ''});
       if (result.hasMore) await api.alarms.create(CONTINUE, {delayInMinutes: 0.5});
       else await api.alarms.clear(CONTINUE);
     } catch (error) {
@@ -75,7 +107,9 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
         try {await feedbackClient.syncFeedback(source, 'finish', {...run, failures: Math.min(10000, run.failures + 1)});} catch {}
         await api.storage.local.remove('syncRun');
       }
-      await writeStatus(error.message);
+      await api.storage.local.set({batchPending: false});
+      await api.alarms.clear(CONTINUE);
+      await writeStatus(error instanceof NotLoggedInError || error instanceof RateLimitedError || /https?:\/\//.test(error.message) ? syncError(error) : error.message, false, 'error');
       await api.action.setBadgeText({text: '!'});
     } finally { cancellation = null; }
   }
@@ -163,6 +197,7 @@ export function createSourceController(api, {fetcher, collectors = {}, catalogs 
     if (!SOURCES.includes(source)) throw new Error('Choose a supported source.');
     return scopedApi(api, source);
   };
+  const localStatus = Object.fromEntries(['codex', 'claude-code'].map(source => [source, statusWriter(sourceApi(source))]));
   const client = async () => createClient(parsePairing((await api.storage.local.get('code')).code), fetcher);
   return {
     ready: Promise.all(Object.values(browsers).map(controller => controller.ready)),
@@ -178,14 +213,17 @@ export function createSourceController(api, {fetcher, collectors = {}, catalogs 
       const scoped = sourceApi(source), settings = normalizePreferences(preferences);
       if (!isLocal(source)) return browsers[source].save(settings);
       await (await client()).localPreferences(source, settings);
-      await scoped.storage.local.set({preferences: settings, status: {running: false,
-        message: settings.schedule === 'auto' ? 'Saved. Phase Pal checks selected local chats every five seconds while sync is enabled.' : 'Saved. Select Sync now when ready.'}});
+      await scoped.storage.local.set({preferences: settings});
+      await localStatus[source](settings.schedule === 'auto' ? 'Saved. Phase Pal checks selected local chats every five seconds while sync is enabled.' : 'Saved. Select Sync now when ready.');
     },
     async sync(source, full = false) {
       const scoped = sourceApi(source);
       if (!isLocal(source)) return browsers[source].sync(full);
-      await (await client()).localSync(source);
-      await scoped.storage.local.set({status: {running: false, message: 'Local sync queued. Selected chats will appear in Phase Pal history.'}});
+      await localStatus[source]('Sending the local sync request to Phase Pal…', true);
+      try {
+        await (await client()).localSync(source);
+        await localStatus[source]('Local sync queued. Check Phase Pal for completion and any issues.');
+      } catch (error) {await localStatus[source](error.message, false, 'error'); throw error;}
     },
     alarm(name) {const source = name.split(':')[1]; return browsers[source]?.alarm(name.split(':')[0]) ?? Promise.resolve();},
     async disconnect() {

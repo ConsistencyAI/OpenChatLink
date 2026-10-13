@@ -35,7 +35,7 @@ test('a new app scope or avatar resets collection watermark',async()=>{
                             fetcher:async()=>ok({connectionId:'new',targetName:'Reina'})});
   assert.deepEqual(received.state,{});
   assert.equal(received.personalOnly,true);
-  assert.deepEqual(result,{connectionId:'new',filterKey:snapshotKey({}),targetName:'Reina',state:{fresh:true},count:1,hasMore:false});
+  assert.deepEqual(result,{connectionId:'new',filterKey:snapshotKey({}),targetName:'Reina',state:{fresh:true},count:1,hasMore:false,processed:0,inspected:0,delivered:0});
 });
 test('same scope resumes; a failed import never returns an advanced watermark',async()=>{
   await collect({pairing,saved:{connectionId:'same',filterKey:snapshotKey({}),state:{marker:7}},fetcher:async()=>ok({connectionId:'same'}),

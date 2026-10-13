@@ -1,5 +1,5 @@
 // Derived from hstry's MIT-licensed Claude web collector.
-import {fetchJson, sleep, toMs} from '../lib/common.js';
+import {fetchJson, sleep, toMs, syncError} from '../lib/common.js';
 import {canCollect, conversationKey, isConversationId, normalizePreferences} from '../preferences.js';
 const BASE = 'https://claude.ai';
 
@@ -55,28 +55,31 @@ export async function syncClaude({state = {}, push, preferences = {}, signal, re
   preferences = normalizePreferences(preferences);
   if (!canCollect(preferences)) return {state: {}, conversations: 0, hasMore: false};
   const selected = new Set(preferences.selected.map(row => conversationKey(row.accountId, row.id)));
-  let cursor = state.cursor ?? null, count = 0, processed = 0, inspected = 0, failures = state.pendingFailures ?? 0;
+  let cursor = state.cursor ?? null, count = 0, processed = 0, inspected = 0, failures = state.pendingFailures ?? 0, batchFailures = 0;
   const started = Date.now(), runStarted = state.runStartedMs ?? started, previous = state.lastSyncMs ?? 0, seen = new Set(state.seen ?? []);
   for (;;) {
     signal?.throwIfAborted();
+    await report({phase: 'scanning', inspected, processed});
     const page = await listClaudeConversations({cursor, signal});
     for (let i = 0; i < page.items.length; i++) {
       const item = page.items[i], key = conversationKey(item.accountId, item.id);
       if (processed >= maxConversations || (inspected > 0 && Date.now() - started >= 20000))
-        return {state: {cursor: {orgIndex: cursor?.orgIndex ?? 0, offset: (cursor?.offset ?? 0) + i}, seen: [...seen].slice(-5000), lastSyncMs: previous, runStartedMs: runStarted, pendingFailures: failures}, conversations: count, hasMore: true, failures};
+        return {state: {cursor: {orgIndex: cursor?.orgIndex ?? 0, offset: (cursor?.offset ?? 0) + i}, seen: [...seen].slice(-5000), lastSyncMs: previous, runStartedMs: runStarted, pendingFailures: failures}, conversations: count, hasMore: true, failures: batchFailures, processed, inspected};
       inspected++;
+      if (inspected === 1 || inspected % 25 === 0) await report({phase: 'scanning', inspected, processed});
       if ((preferences.chats !== 'all' && !selected.has(key)) || seen.has(key) || (previous && item.updatedAt && item.updatedAt <= previous - 300000)) continue;
       if (processed) await sleep(400, signal);
+      await report({phase: 'importing', inspected, processed});
       let conversation;
       try {
         const detail = await fetchJson(`${BASE}/api/organizations/${item.accountId}/chat_conversations/${item.id}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual`, {signal});
         conversation = parse(detail, item);
-      } catch {signal?.throwIfAborted(); failures++;}
+      } catch (error) {signal?.throwIfAborted(); failures++; batchFailures++; await report({phase: 'error', message: syncError(error), inspected, processed});}
       if (conversation) count += await push('claude-web', 'claude-web', [conversation]);
       seen.add(key); processed++; await report({processed});
     }
     cursor = page.nextCursor;
     if (!cursor) break;
   }
-  return {state: {lastSyncMs: failures ? previous : runStarted}, conversations: count, hasMore: false, failures};
+  return {state: {lastSyncMs: failures ? previous : runStarted}, conversations: count, hasMore: false, failures: batchFailures, processed, inspected};
 }

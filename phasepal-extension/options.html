@@ -20,16 +20,18 @@
       <div class="source-icons" role="group" aria-label="Supported sources"><span class="source-icon" role="img" aria-label="ChatGPT" title="ChatGPT"><span class="source-mark source-chatgpt" aria-hidden="true"></span></span><span class="source-icon" role="img" aria-label="Claude" title="Claude"><span class="source-mark source-claude" aria-hidden="true"></span></span><span class="source-icon" role="img" aria-label="Codex" title="Codex"><span class="source-mark source-codex" aria-hidden="true"></span></span><span class="source-icon" role="img" aria-label="Claude Code" title="Claude Code"><span class="source-mark source-claude-code" aria-hidden="true"></span></span></div>
     </section>
 
-    <section class="card connection-card" aria-labelledby="connection-title">
+    <section id="connection-card" class="card connection-card" aria-labelledby="connection-title">
       <div class="card-heading">
         <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 1 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg></span><div><h2 id="connection-title">Connect to Phase Pal</h2><p>Enable External Conversations in Phase Pal, then copy your connection code.</p></div></div>
-        <span id="connection-state" class="connection-state"><span class="state-dot" aria-hidden="true"></span><span id="connection-label">Not paired</span></span>
+        <button id="edit-connection" class="button button-quiet" type="button" aria-expanded="false" aria-controls="connection-fields" hidden>Change connection</button><span id="connection-state" class="connection-state"><span class="state-dot" aria-hidden="true"></span><span id="connection-label">Not paired</span></span>
       </div>
+      <div id="connection-fields">
       <form id="connection-form">
         <label for="code">Connection code</label>
         <div class="connection-controls"><input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your ocl1.… code" required><button id="connect" class="button button-primary" type="submit">Connect <span aria-hidden="true">→</span></button></div>
       </form>
       <details class="setup-help"><summary>Where do I find my connection code?</summary><ol><li>In Phase Pal, open <strong>Chat Settings → General → External Conversations</strong> and enable sync.</li><li>Select <strong>Copy connection code</strong> and paste it above.</li><li>For web chats, sign in to <a href="https://chatgpt.com" target="_blank" rel="noreferrer">ChatGPT</a> or <a href="https://claude.ai" target="_blank" rel="noreferrer">Claude</a> in Chrome.</li></ol></details>
+      </div>
     </section>
 
     <form id="preferences">
@@ -74,8 +76,11 @@
       </div>
 
       <section class="save-bar" aria-label="Save and sync">
-        <div class="save-status"><span class="status-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 12 3 3 5-6"/><circle cx="12" cy="12" r="9"/></svg></span><div><p id="status" role="status">Not connected.</p><p class="field-hint">Save your choices before syncing.</p></div></div>
+        <div class="save-main">
+        <div class="save-status"><span class="status-icon" aria-hidden="true"><svg class="status-working" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/></svg><svg class="status-idle" viewBox="0 0 24 24"><path d="m8 12 3 3 5-6"/><circle cx="12" cy="12" r="9"/></svg></span><div><p id="status" role="status">Not connected.</p><p class="field-hint">Save your choices before syncing.</p></div></div>
         <div class="actions"><button id="save" class="button button-primary" type="submit">Save sync options</button><button id="sync" class="button button-outline" type="button">Sync now <span aria-hidden="true">→</span></button></div>
+        </div>
+        <details id="sync-activity" class="sync-activity"><summary><span>Sync activity</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><ol id="activity-list" aria-label="Recent sync activity"></ol><p id="activity-empty" class="field-hint">Sync stages and issues will appear here.</p></details>
       </section>
     </form>
 

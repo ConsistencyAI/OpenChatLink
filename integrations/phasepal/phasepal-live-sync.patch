@@ -337,10 +337,10 @@ index 000000000..8f795260b
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 new file mode 100644
-index 000000000..48015547e
+index 000000000..7637228da
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs	
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,366 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 +using System;
 +using System.Collections.Concurrent;
@@ -378,7 +378,17 @@ index 000000000..48015547e
 +        public event Action Changed;
 +        public bool Enabled => _enabled;
 +        public bool Ready => _receiver != null && _enabled && !_disposed;
-+        public string StatusText => _statusText;
++        public string StatusText
++        {
++            get {
++                lock (_syncGate) {
++                    if (_syncRuns.Count == 0) return _statusText;
++                    int updated = 0;
++                    foreach (SyncRun run in _syncRuns.Values) updated += run.Updated;
++                    return "External sync in progress. " + updated + " chats updated. Open Sync activity in OpenChatLink for details.";
++                }
++            }
++        }
 +        private readonly object _syncGate = new object();
 +        private readonly Dictionary<string, SyncRun> _syncRuns = new Dictionary<string, SyncRun>();
 +        private readonly HashSet<string> _failedSources = new HashSet<string>();
@@ -388,7 +398,7 @@ index 000000000..48015547e
 +            public string Id;
 +            public bool Manual;
 +            public int Updated, Failures;
-+            public DateTime Deadline;
++            public DateTime Deadline, LastLog;
 +        }
 +        public bool IsSyncing { get { lock (_syncGate) return _syncRuns.Count > 0; } }
 +        /// <summary>Consumes completed feedback on the host thread.</summary>
@@ -411,14 +421,22 @@ index 000000000..48015547e
 +                if (_disposed || _suspended || !_enabled || !_historyConsent || (owner.HasValue && owner != _generation)) return;
 +                string id = (string)body["id"];
 +                if (phase == "start" && (!_syncRuns.TryGetValue(source, out SyncRun previous) || previous.Id != id))
-+                    _syncRuns[source] = new SyncRun { Id = id, Manual = (bool)body["manual"] };
++                {
++                    _syncRuns[source] = new SyncRun { Id = id, Manual = (bool)body["manual"], LastLog = DateTime.UtcNow };
++                    if ((bool)body["manual"]) UnityEngine.Debug.Log("[OpenChatLink] " + source + " manual sync started. Browser stages are shown in the extension's Sync activity.");
++                }
 +                if (!_syncRuns.TryGetValue(source, out SyncRun run) || run.Id != id) return;
 +                if (phase == "start" && (bool)body["manual"]) run.Manual = true;
 +                run.Deadline = DateTime.UtcNow.AddMinutes(3);
 +                run.Failures = Math.Min(10000, run.Failures + (int)body["failures"]);
++                if (run.Manual && DateTime.UtcNow - run.LastLog >= TimeSpan.FromSeconds(30)) {
++                    run.LastLog = DateTime.UtcNow;
++                    UnityEngine.Debug.Log("[OpenChatLink] " + source + " sync active; " + run.Updated + " chats updated.");
++                }
 +                if (phase == "finish" || phase == "cancel") {
 +                    _syncRuns.Remove(source);
 +                    if (phase == "finish") CompleteSync(source, run);
++                    else if (run.Manual) UnityEngine.Debug.Log("[OpenChatLink] " + source + " manual sync cancelled.");
 +                }
 +            }
 +            MarkChanged();
@@ -433,9 +451,13 @@ index 000000000..48015547e
 +
 +        private void CompleteSync(string source, SyncRun run)
 +        {
++            string summary = ChatV2ExternalConversationStore.SourceName(source) + " sync " + (run.Failures > 0 ? "could not finish" : "complete") + ". " + run.Updated + " chats updated.";
++            _statusText = summary + (run.Failures > 0 ? " Open Sync activity in OpenChatLink for details, then retry." : string.Empty);
 +            bool firstFailure = run.Failures > 0 && _failedSources.Add(source);
 +            if (run.Failures == 0) _failedSources.Remove(source);
 +            if (run.Manual || firstFailure) {
++                if (run.Failures > 0) UnityEngine.Debug.LogWarning("[OpenChatLink] " + _statusText);
++                else UnityEngine.Debug.Log("[OpenChatLink] " + summary);
 +                if (_syncNotices.Count >= 8) _syncNotices.Dequeue();
 +                _syncNotices.Enqueue(new ChatV2ExternalSyncNotice { Source = source, Manual = run.Manual,
 +                    Updated = run.Updated, Failures = run.Failures });
@@ -1461,10 +1483,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..f2b5ca7e4
+index 000000000..cce8e563d
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,204 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1610,8 +1632,7 @@ index 000000000..f2b5ca7e4
 +                }
 +            }
 +            _toggle?.SetValueWithoutNotify(_service.Enabled); _copyCode?.SetEnabled(_service.Ready);
-+            if (_status != null) _status.text = (_service as IChatV2ExternalSyncFeedback)?.IsSyncing == true
-+                ? Text("ChatV2_ExternalSync_Running_Key", "Syncing external conversations…") : _service.StatusText;
++            if (_status != null) _status.text = _service.StatusText;
 +            if (_banner == null) return;
 +            _banner.style.display = info == null ? DisplayStyle.None : DisplayStyle.Flex;
 +            if (info == null) return;
@@ -1813,10 +1834,10 @@ index cdc53ab40..6e824a2cb 100644
              if (model == null)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
-index 000000000..ace0fb2aa
+index 000000000..c0865d830
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
-@@ -0,0 +1,812 @@
+@@ -0,0 +1,815 @@
 +// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 +using System;
 +using System.Collections.Generic;
@@ -2447,9 +2468,11 @@ index 000000000..ace0fb2aa
 +            var signal = new JObject { ["id"] = Guid.NewGuid().ToString("N"), ["manual"] = manual, ["failures"] = 0 };
 +            service.ReportSync("chatgpt", "start", signal);
 +            Assert.That(service.IsSyncing, Is.True);
++            Assert.That(service.StatusText, Does.Contain("sync in progress"));
 +            signal["failures"] = failures;
 +            service.ReportSync("chatgpt", "finish", signal);
 +            Assert.That(service.IsSyncing, Is.False);
++            Assert.That(service.StatusText, Does.Contain(failures > 0 ? "could not finish" : "sync complete"));
 +            var completed = service.TakeSyncNotices();
 +            Assert.That(completed.Count, Is.EqualTo(notices));
 +            if (completed.Count > 0) {
@@ -2491,6 +2514,7 @@ index 000000000..ace0fb2aa
 +            Assert.That(service.IsSyncing, Is.True);
 +            await Post("ingest", new JObject { ["conversation"] = Conversation() });
 +            await Post("ingest", new JObject { ["conversation"] = Conversation() });
++            Assert.That(service.StatusText, Does.Contain("1 chats updated"));
 +            await Post("sync/chatgpt/finish", signal);
 +            var notices = service.TakeSyncNotices();
 +            Assert.That(service.IsSyncing, Is.False);

@@ -6,6 +6,7 @@ import {
   RateLimitedError,
   fetchJson,
   sleep,
+  syncError,
   textPart,
   thinkingPart,
   toMs,
@@ -73,7 +74,7 @@ async function* listUpdatedConversations(token, accountId, sinceMs, signal, star
       if (sinceMs && updatedMs && updatedMs <= sinceMs) return;
       yield {item, offset: offset + index};
     }
-    if (items.length < PAGE_SIZE || offset + PAGE_SIZE >= (data?.total ?? 0)) return;
+    if (items.length < PAGE_SIZE || (typeof data?.total === 'number' && offset + PAGE_SIZE >= data.total)) return;
   }
 }
 
@@ -330,7 +331,6 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
     const runStartedMs = state?.accounts?.[key]?.runStartedMs ?? Date.now();
     const seen = {...state?.accounts?.[key]?.seen};
     let failures = state?.accounts?.[key]?.pendingFailures ?? 0;
-    failed += failures;
 
     let batch = [];
     let first = true;
@@ -340,9 +340,10 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
         if (batch.length) total += await push(sourceId, 'chatgpt-web', batch);
         newState.resumeAccount = key;
         newState.accounts[key] = {lastSyncMs, runStartedMs, seen, offset, pendingFailures: failures, name: account.name};
-        return {state: newState, conversations: total, hasMore: true, failures: failed};
+        return {state: newState, conversations: total, hasMore: true, failures: failed, processed, inspected};
       }
       inspected++;
+      if (inspected === 1 || inspected % 25 === 0) await report({phase: 'scanning', inspected, processed});
       if (!isConversationId(item.id) || (preferences.chats === 'selected' && !selected.has(conversationKey(account.id, item.id)))) continue;
       const version = toMs(item.update_time) ?? 0;
       if (seen[item.id] === version) continue;
@@ -362,12 +363,12 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
         signal?.throwIfAborted();
         failures++;
         failed++;
-        log(`chatgpt: skipping conversation ${item.id}: ${err.message}`);
+        await report({phase: 'error', message: syncError(err), inspected, processed});
         if (err instanceof RateLimitedError) break;
       }
       processed++;
       await report({ detected, processed });
-      if (batch.length >= 10) {
+      if (batch.length >= 1) {
         total += await push(sourceId, 'chatgpt-web', batch);
         batch = [];
       }
@@ -392,5 +393,5 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
 
   await report({ phase: 'complete', detected, processed });
 
-  return { state: newState, conversations: total, failures: failed };
+  return { state: newState, conversations: total, failures: failed, processed, inspected };
 }

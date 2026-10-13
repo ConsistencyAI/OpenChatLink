@@ -61,15 +61,17 @@ for (const source of ['chatgpt', 'claude']) test(`${source} bounds catalog scans
   };
   const collector = source === 'chatgpt' ? syncChatGPT : syncClaude;
   let state = {}, result;
+  const progress = [];
   for (let pass = 0; pass < 5; pass++) {
     const started = clock;
-    result = await collector({state, preferences: {selected: [{accountId, id: id(1)}]}, log: () => {},
+    result = await collector({state, preferences: {selected: [{accountId, id: id(1)}]}, log: () => {}, report: async value => progress.push(value),
       push: async () => assert.fail('unselected chat imported')});
     assert.ok(clock - started <= 20000);
     state = result.state;
     if (!result.hasMore) break;
   }
   assert.ok(!result.hasMore); assert.equal(result.conversations, 0);
+  assert.ok(progress.some(value => value.phase === 'scanning' && value.inspected > 0));
   assert.deepEqual(offsets, source === 'chatgpt' ? [0, 50, 50, 100, 100] : [0, 50, 50, 100, 100, 150]);
 });
 
@@ -145,4 +147,29 @@ test('fresh selected-only defaults perform no ChatGPT requests',async()=>{
   globalThis.fetch=async()=>assert.fail('request without selected chats');
   try {assert.deepEqual(await syncChatGPT({state:{},push:async()=>assert.fail('import'),log:()=>{}}),{state:{},conversations:0});}
   finally {globalThis.fetch=before;}
+});
+
+
+test('ChatGPT scans past a full page without a total to find selected older chats', async t => {
+  const before = globalThis.fetch, offsets = [];
+  t.after(() => {globalThis.fetch = before;});
+  const accountId = 'personal-id', id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
+  globalThis.fetch = async value => {
+    const url = new URL(value); let data;
+    if (url.pathname.endsWith('/api/auth/session')) data = {accessToken: 'synthetic'};
+    else if (url.pathname.includes('/accounts/check')) data = {accounts: {p: {account: {account_id: accountId, structure: 'personal'}}}};
+    else if (url.pathname.endsWith('/conversations')) {
+      const offset = Number(url.searchParams.get('offset')); offsets.push(offset);
+      data = {items: Array.from({length: offset === 0 ? 50 : 1}, (_, i) => ({id: id(offset + i + 1), update_time: 1700000000}))};
+    } else {
+      assert.ok(url.pathname.endsWith(id(51)));
+      data = {current_node: 'n', mapping: {n: {message: {author: {role: 'user'}, content: {content_type: 'text', parts: ['fixture']}}}}};
+    }
+    return {ok: true, status: 200, json: async () => data};
+  };
+  const result = await syncChatGPT({state: {}, preferences: {selected: [{accountId, id: id(51)}]},
+    push: async (_source, _adapter, chats) => chats.length, log: () => {}});
+  assert.deepEqual(offsets, [0, 50]);
+  assert.equal(result.conversations, 1);
+  assert.equal(result.inspected, 51);
 });

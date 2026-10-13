@@ -221,3 +221,30 @@ footer { display: flex; justify-content: center; gap: 10px; padding: 28px 0 0; c
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* Paired connections recede; activity stays with the sync controls. */
+.connection-card.is-paired { padding: 14px 20px; box-shadow: none; }
+.connection-card.is-paired .card-heading { margin-bottom: 0; }
+.connection-card.is-paired .heading-with-icon { flex: 1; }
+.connection-card.is-paired .heading-with-icon p { display: none; }
+.connection-card.is-paired h2 { font-size: 14px; }
+.connection-card.is-paired .section-icon { width: 30px; height: 30px; border-radius: 9px; }
+.connection-card.is-paired #connection-fields { margin-top: 20px; }
+.save-bar { display: block; }
+.save-main { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.sync-activity { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sync-activity summary { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; list-style: none; }
+.sync-activity summary::-webkit-details-marker { display: none; }
+.sync-activity summary svg { width: 16px; height: 16px; }
+.sync-activity[open] summary svg { transform: rotate(180deg); }
+#activity-list { max-height: 240px; overflow: auto; list-style: none; padding: 0; margin: 12px 0 0; scrollbar-width: thin; }
+#activity-list li { display: flex; align-items: baseline; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 11px; overflow-wrap: anywhere; }
+#activity-list time { flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+#activity-list li[data-level="error"] { color: var(--ink); font-weight: 650; border-left: 3px solid var(--blue); padding-left: 10px; }
+.status-working { display: none; }
+.save-bar[data-running="true"] .status-idle { display: none; }
+.save-bar[data-running="true"] .status-working { display: block; animation: sync-turn 1.5s linear infinite; }
+@keyframes sync-turn { to { transform: rotate(360deg); } }
+@media (max-width: 899px) { .save-main { flex-direction: column; align-items: stretch; gap: 16px; } }
+@media (max-width: 559px) { .connection-card.is-paired .connection-state { margin-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .save-bar[data-running="true"] .status-working { animation: none; } }

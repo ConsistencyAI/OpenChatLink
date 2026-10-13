@@ -95,3 +95,11 @@ export function toMs(value) {
 export function shortId(id) {
   return String(id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toLowerCase();
 }
+
+// Safe summaries only: provider errors can contain private conversation URLs.
+export function syncError(error) {
+  if (error instanceof NotLoggedInError) return 'Sign in to the source website in Chrome, then retry.';
+  if (error instanceof RateLimitedError) return 'The source is rate limited or temporarily unavailable. Wait a minute, then retry.';
+  if (error?.name === 'TimeoutError') return 'The source request timed out. Check your connection, then retry.';
+  return 'A conversation could not be read. Open the source website, then retry.';
+}

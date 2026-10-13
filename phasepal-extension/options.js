@@ -63,9 +63,35 @@ function drawList() {
   el('chat-empty-description').textContent = search ? 'Try another title or clear your search.' : loaded ? 'Refresh the list or choose another source.' : 'Load your chat list, then select the conversations you want to sync.';
   el('more').hidden = !cursor;
 }
+let editingConnection = false, pairedBefore = false, statusRevision = 0;
+el('edit-connection').addEventListener('click', () => {
+  editingConnection = !editingConnection; void renderStatus();
+});
 async function renderStatus() {
-  const data = await chrome.storage.local.get([`status:${source}`, 'code']);
+  const revision = ++statusRevision;
+  const data = await chrome.storage.local.get([`status:${source}`, `activity:${source}`, 'code']);
+  if (revision !== statusRevision) return;
   const status = data[`status:${source}`], code = data.code;
+  if (Boolean(code) !== pairedBefore) editingConnection = false;
+  pairedBefore = Boolean(code);
+  el('connection-card').classList.toggle('is-paired', Boolean(code));
+  el('connection-title').textContent = code ? 'Phase Pal connection' : 'Connect to Phase Pal';
+  el('connection-fields').hidden = Boolean(code) && !editingConnection;
+  el('edit-connection').hidden = !code;
+  el('edit-connection').textContent = editingConnection ? 'Close' : 'Change connection';
+  el('edit-connection').setAttribute('aria-expanded', String(editingConnection));
+  const activity = data[`activity:${source}`] ?? [];
+  const list = el('activity-list');
+  list.replaceChildren();
+  for (const entry of [...activity].reverse()) {
+    const row = document.createElement('li'), time = document.createElement('time'), message = document.createElement('span');
+    row.dataset.level = entry.level;
+    time.dateTime = new Date(entry.time).toISOString();
+    time.textContent = new Date(entry.time).toLocaleTimeString();
+    message.textContent = (entry.level === 'error' ? 'Issue: ' : '') + entry.message; row.append(time, message); list.append(row);
+  }
+  el('activity-empty').hidden = activity.length > 0;
+  document.querySelector('.save-bar').dataset.running = String(Boolean(status?.running));
   el('connection-state').dataset.paired = String(Boolean(code));
   el('connection-label').textContent = code ? 'Pairing saved' : 'Not paired';
   el('status').textContent = dirty ? 'You have unsaved sync options. Select Save sync options.'
@@ -92,7 +118,7 @@ el('connection-form').addEventListener('submit', event => {
   event.preventDefault();
   if (busy) return;
   void act(async () => {
-    await request({type: 'connect', code: el('code').value.trim()}); el('code').value = '';
+    await request({type: 'connect', code: el('code').value.trim()}); el('code').value = ''; editingConnection = false;
   });
 });
 el('preferences').addEventListener('change', event => {

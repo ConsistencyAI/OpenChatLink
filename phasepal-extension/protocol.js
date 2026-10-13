@@ -95,12 +95,15 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
 export async function collect({pairing, preferences = {}, saved = {}, full = false, collector, fetcher, signal, report = async () => {}}) {
   preferences = normalizePreferences(preferences);
   const filterKey = snapshotKey(preferences);
-  const client = createClient(pairing, fetcher, signal, () => report({phase: 'saving'}), preferences);
+  let delivered = 0;
+  await report({phase: 'connecting'});
+  const client = createClient(pairing, fetcher, signal, () => report({phase: 'saving', delivered: ++delivered}), preferences);
   const health = await client.health();
   const state = !full && saved.connectionId === health.connectionId && saved.filterKey === filterKey ? saved.state ?? {} : {};
   const result = await collector({state, push: client.push, register: async () => {},
                                   log: () => {}, report, personalOnly: true, signal, maxConversations: 50, preferences});
   return {connectionId: health.connectionId, filterKey, state: result.state, count: result.conversations,
+          processed: result.processed ?? 0, inspected: result.inspected ?? 0, delivered,
           targetName: health.targetName, hasMore: Boolean(result.hasMore),
           ...(result.failures > 0 ? {failures: result.failures} : {})};
 }

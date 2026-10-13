@@ -150,3 +150,54 @@ for (const failure of ['offline', 'revoked']) test(`disconnect clears browser pa
   await controller.alarm(ALARM + ':chatgpt'); await controller.alarm(ALARM + ':claude');
   assert.match(api.state['status:codex'].message, /Disable External Conversations/);
 });
+
+
+test('saving preserves read counts and activity survives a continuation restart', async () => {
+  let calls = 0;
+  const collector = async ({report, push}) => {
+    await report({phase: 'scanning', inspected: 25, processed: 0});
+    await report({processed: 2});
+    await push('chatgpt-web', 'chatgpt-web', [{externalId: '00000000-0000-4000-8000-000000000001',
+      createdAt: 1700000000000, messages: [{role: 'user', content: 'Synthetic fixture'}]}]);
+    return {state: {checkpoint: ++calls}, conversations: 1, hasMore: calls === 1, processed: 2, inspected: 25};
+  };
+  const first = setup({code, preferences: {chats: 'all', schedule: 'manual'}}, collector);
+  await first.controller.sync();
+  assert.equal(first.api.state.status.running, true);
+  assert.match(first.api.state.status.message, /30 seconds/);
+  assert.ok(first.api.state.activity.some(entry => /received 1 chats; 2 checked/.test(entry.message)));
+  const second = setup(first.api.state, collector);
+  await second.controller.alarm(CONTINUE);
+  assert.match(second.api.state.status.message, /50 list entries scanned, 4 chats checked, 2 sent/);
+  assert.equal(second.api.state.status.running, false);
+  assert.ok(second.api.state.activity.some(entry => /received 1 chats; 2 checked/.test(entry.message)));
+  assert.ok(!JSON.stringify(second.api.state.activity).includes('Synthetic fixture'));
+});
+
+test('unchanged continuation stops with an actionable failure and no pending alarm', async () => {
+  let calls = 0;
+  const feedback = [];
+  const {api, controller} = setup({code, preferences: {chats: 'all', schedule: 'manual'}}, async () => {
+    calls++; return {state: {checkpoint: 1}, conversations: 0, hasMore: true};
+  }, feedback);
+  await controller.sync(); await controller.alarm(CONTINUE);
+  assert.equal(calls, 2);
+  assert.equal(api.state.batchPending, false);
+  assert.equal(api.state.syncRun, undefined);
+  assert.equal(api.alarms.has(CONTINUE), false);
+  assert.match(api.state.status.message, /same batch/);
+  assert.equal(feedback.at(-1).phase, 'finish');
+  assert.equal(feedback.at(-1).failures, 1);
+});
+
+test('activity is bounded and provider URLs are excluded from failures', async () => {
+  const {api, controller} = setup({code, preferences: {chats: 'all', schedule: 'manual'}}, async ({report}) => {
+    for (let processed = 1; processed <= 120; processed++) await report({processed});
+    throw new Error('GET https://chatgpt.com/backend-api/conversation/private-id -> 500');
+  });
+  await controller.sync();
+  assert.equal(api.state.activity.length, 100);
+  assert.equal(api.state.activity.at(-1).level, 'error');
+  assert.match(api.state.status.message, /could not be read/);
+  assert.ok(!JSON.stringify(api.state.activity).includes('private-id'));
+});
