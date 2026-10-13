@@ -30,7 +30,8 @@ Loading the extension alone does not update an installed Phase Pal binary.
 - Sharing changes visibility; it does not change sync choices or source identity.
 - History rows use compact source icons for imported chats, with source and
   Synced/Local copy status on hover. Native rows have no badge. The chat header
-  keeps source/status labels. Badges use conversation ownership rather than model
+  keeps source/status labels for imported chats. Native chat headers have no badge.
+  Badges use conversation ownership rather than model
   selection, and follow the current theme and active-history-row colors.
 - Sending text creates an independent local copy through the existing submit flow.
 - Locally handled controls, research and direct speech keep their current target

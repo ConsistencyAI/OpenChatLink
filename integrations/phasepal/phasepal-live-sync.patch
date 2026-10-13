@@ -1392,10 +1392,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..7ad3516e3
+index 000000000..69881c5d7
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,202 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1516,10 +1516,19 @@ index 000000000..7ad3516e3
 +        private void Refresh()
 +        {
 +            ChatV2ExternalConversationInfo info = _service?.GetSessionInfo(_sessionId);
++            bool syncing = (_service as IChatV2ExternalSyncFeedback)?.IsSyncing == true;
++            bool hasOrigin = info != null ||
++                string.Equals(_sourceChannel?.Trim(), "discord", StringComparison.OrdinalIgnoreCase) ||
++                string.Equals(_sourceChannel?.Trim(), "telegram", StringComparison.OrdinalIgnoreCase);
 +            if (_headerOrigin != null)
 +            {
 +                ChatV2ConversationOriginBadge.Apply(_headerOrigin, info, _sourceChannel);
-+                _header.tooltip = _headerOrigin.tooltip;
++                _headerOrigin.Q<Label>("source").style.display = hasOrigin ? DisplayStyle.Flex : DisplayStyle.None;
++                _headerOrigin.style.display = hasOrigin || syncing
++                    ? new StyleEnum<DisplayStyle>(StyleKeyword.Null)
++                    : new StyleEnum<DisplayStyle>(DisplayStyle.None);
++                _header.EnableInClassList("chat-v2-header--with-origin", hasOrigin || syncing);
++                _header.tooltip = hasOrigin ? _headerOrigin.tooltip : _headerOriginalTooltip;
 +            }
 +            _refreshHistoryOrigins?.Invoke();
 +            if (_service == null) return;
@@ -2574,7 +2583,7 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..8295bb531
+index 000000000..7c3ba22b2
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
 @@ -0,0 +1,167 @@
@@ -2641,7 +2650,7 @@ index 000000000..8295bb531
 +
 +History rows show one 16-pixel source icon beside the title for imported chats.
 +Native Phase Pal chats have no sidebar badge. Synced or Local copy details remain
-+in the row tooltip and the chat header; the header also labels native chats.
++in the row tooltip and the chat header. Native chat headers have no source badge.
 +The badge uses saved conversation ownership, independently of the reply model.
 +Existing Discord and Telegram sidebar icons remain distinct without duplicate
 +source labels. Source icons do not add a history row or increase its height;
@@ -3422,10 +3431,10 @@ index 821bec080..dfad87f8f 100644
 +    display: none;
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
-index 551dcc53e..b40348533 100644
+index 551dcc53e..e39a2c67d 100644
 --- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
-@@ -441,6 +441,134 @@ namespace PhasePal.Tests.ChatV2.EditMode
+@@ -441,6 +441,141 @@ namespace PhasePal.Tests.ChatV2.EditMode
                  historyList.Query<Label>(className: "chat-v2-history-item__title").ToList().Select(label => label.text));
          }
  
@@ -3458,6 +3467,8 @@ index 551dcc53e..b40348533 100644
 +                    Assert.That(badge.Q<Label>("source").text, Is.EqualTo(expectedSource));
 +                    Assert.That(badge.Q<Label>("state").text, Is.EqualTo(expectedState));
 +                    bool historyBadge = name == "chat-v2-history-origin-session";
++                    Assert.That(badge.style.display.value,
++                        Is.EqualTo(sourceName == null ? DisplayStyle.None : DisplayStyle.Flex));
 +                    Assert.That(badge.Q<Label>("state").style.display.value,
 +                        Is.EqualTo(historyBadge || sourceName == null ? DisplayStyle.None : DisplayStyle.Flex));
 +                    if (historyBadge) Assert.That(badge.style.display.value,
@@ -3510,6 +3521,8 @@ index 551dcc53e..b40348533 100644
 +                Assert.That(service.Subscribers, Is.Zero);
 +                Assert.That(root.Query<VisualElement>(name: "chat-v2-header-origin").ToList().Count, Is.EqualTo(1));
 +                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").style.display.value, Is.EqualTo(DisplayStyle.None));
++                Assert.That(root.Q<VisualElement>("chat-v2-header").ClassListContains("chat-v2-header--with-origin"), Is.False);
 +                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
 +                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").style.display.value, Is.EqualTo(DisplayStyle.None));
 +                Assert.That(icon.ClassListContains("chat-v2-history-origin-icon--claude"), Is.False);
@@ -3531,8 +3544,11 @@ index 551dcc53e..b40348533 100644
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.None));
 +                service.IsSyncing = true; service.Notify();
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.Flex));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").style.display.value, Is.EqualTo(DisplayStyle.Flex));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").style.display.value, Is.EqualTo(DisplayStyle.None));
 +                service.IsSyncing = false; service.Notify();
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.None));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").style.display.value, Is.EqualTo(DisplayStyle.None));
 +            } finally { external.Dispose(); }
 +            Assert.That(root.Q<VisualElement>("chat-v2-external-sync-progress"), Is.Null);
 +            Assert.That(service.Subscribers, Is.Zero);
