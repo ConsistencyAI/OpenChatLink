@@ -10,6 +10,11 @@ use crate::paths::service_port_path;
 #[expect(clippy::allow_attributes)]
 // ast-grep-ignore: rust-no-clippy-allow
 #[expect(clippy::default_trait_access)]
+// ast-grep-ignore: rust-no-clippy-allow
+#[allow(
+    clippy::double_must_use,
+    reason = "Tonic's async_trait output adds must_use to boxed Future return values"
+)]
 pub mod proto {
     tonic::include_proto!("hstry.service");
 }
