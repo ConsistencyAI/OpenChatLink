@@ -26,7 +26,7 @@ personality separately in Phase Pal. A model's context limit still applies.
 
 ## Set up the source
 
-Use this checkout's [hstry instructions](../../README.md) to install hstry and
+Use this checkout's [hstry instructions](../../docs/UPSTREAM_HSTRY.md) to install hstry and
 hstry-api. The importer can also read a database made by the same upstream
 hstry version (0.5.27). It does not require compiling the Rust workspace.
 The hstry browser collector does require a working hstry-api executable.
