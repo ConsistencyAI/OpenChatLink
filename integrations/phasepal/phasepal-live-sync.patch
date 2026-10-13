@@ -1337,7 +1337,7 @@ index e54922854..da2b3ca8f 100644
          }
  
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs
-index 1a6bb87c5..b74d1cd03 100644
+index 1a6bb87c5..7048f8199 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
 @@ -234,6 +234,7 @@ namespace PhasePal.Services.ChatV2.Platform
@@ -1348,14 +1348,16 @@ index 1a6bb87c5..b74d1cd03 100644
          private const string LocalModelPersonalityNoticePlayerPrefsKey =
              ChatV2LocalModelPreferenceKeys.PersonalityNotice;
          private const string LocalModelPersonalityNoticeSource = "local-model-personality";
-@@ -415,6 +416,7 @@ namespace PhasePal.Services.ChatV2.Platform
-         public async Task SubmitTextAsync(string text)
-         {
-             string submittedComposerText = text ?? string.Empty;
+@@ -468,6 +469,9 @@ namespace PhasePal.Services.ChatV2.Platform
+                 return;
+             }
+ 
++            // Control commands keep their current target. Only a conversation submit needs a writable copy.
 +            if (PrepareExternalConversation != null && !await PrepareExternalConversation()) return;
-             if (!_isActive())
++
+             ChatV2SessionTurnKey targetKey = _requestFactory.CaptureCurrentTarget();
+             if (!TryBeginTextSubmit(targetKey))
              {
-                 _status.Show(global::PhasePal.Services.ChatV2.Toolkit.ChatV2Localization.Resolve("ChatV2_Status_Disabled_Key", "Chat V2 is disabled."), ChatV2StatusSeverity.Warning, ChatV2StatusLifetime.Temporary, "activation");
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs
 index 805db04dc..234353d67 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Runtime/ChatV2RuntimeSubmitOrchestrator.cs	
@@ -1706,10 +1708,10 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
          public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
-index 000000000..e5ac24ee4
+index 000000000..ace0fb2aa
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
-@@ -0,0 +1,767 @@
+@@ -0,0 +1,812 @@
 +// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 +using System;
 +using System.Collections.Generic;
@@ -2212,6 +2214,51 @@ index 000000000..e5ac24ee4
 +            Assert.That(_history.LoadPage("avatar", original.SessionId, 10).Count, Is.EqualTo(2));
 +        }
 +
++        [TestCase(false, false)]
++        [TestCase(true, false)]
++        [TestCase(false, true)]
++        [TestCase(true, true)]
++        public async Task ExistingNativeHistoryRemainsWritableWithImportsOrBrokenRegistry(bool global, bool brokenRegistry)
++        {
++            if (global) _history = new ChatV2GlobalHistoryStore(Path.Combine(_root, "ChatV2History"));
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            string native = Guid.NewGuid().ToString("D");
++            var user = new ChatV2Message(ChatV2MessageId.Create("legacy-user"), ChatV2MessageRole.User, "Existing question",
++                attachmentKind: ChatV2AttachmentKind.Image, attachmentUrl: "data:image/png;base64,AQID");
++            _history.SaveMessage("avatar", native, user);
++            _history.SaveMessage("avatar", native, new ChatV2Message(ChatV2MessageId.Create("legacy-reply"),
++                ChatV2MessageRole.Assistant, "Existing reply"));
++            _history.RenameSession("avatar", native, "My saved chat");
++            _history.SetSessionPinned("avatar", native, true);
++
++            Assert.That(_store.CanWrite(native), Is.True, "Startup must allow native chat before ownership loads.");
++            if (brokenRegistry)
++            {
++                string path = Path.Combine(_root, "Settings", "external_conversations.json");
++                Directory.CreateDirectory(Path.GetDirectoryName(path));
++                File.WriteAllText(path, "broken registry");
++                Assert.Throws<Newtonsoft.Json.JsonReaderException>(() => _store.Initialize());
++            }
++            else
++            {
++                var imported = await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++                await _store.CreateLocalCopyAsync(imported.SessionId, "other", CancellationToken.None);
++            }
++
++            var visible = new ChatV2SessionHistoryService(_history, () => "avatar", globalIdentity: global);
++            visible.CanWriteSession = _store.CanWrite;
++            visible.LoadSession(native, 10);
++            Assert.That(visible.GetCurrentSessionMessages().Select(row => row.Text),
++                Is.EqualTo(new[] { "Existing question", "Existing reply" }));
++            Assert.That(visible.GetCurrentSessionMessages()[0].AttachmentUrl, Is.EqualTo(user.AttachmentUrl));
++            Assert.That(_history.GetSessionSummary("avatar", native).Title, Is.EqualTo("My saved chat"));
++            Assert.That(_history.GetSessionSummary("avatar", native).IsPinned, Is.True);
++            visible.Append(new ChatV2Message(ChatV2MessageId.Create("continuation"), ChatV2MessageRole.User, "Continue"));
++            Assert.That(_history.LoadPage("avatar", native, 10).Count, Is.EqualTo(3));
++            Assert.That(visible.RemoveMessage(user.Id), Is.True);
++            Assert.That(_history.LoadPage("avatar", native, 10).Count, Is.EqualTo(2));
++        }
++
 +        [TestCase("system")]
 +        [TestCase("tool")]
 +        public async Task RejectsUnsupportedRolesBeforeWriting(string role)
@@ -2527,10 +2574,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..3d39de4ec
+index 000000000..8295bb531
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,167 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink imports personal ChatGPT and Claude web chats through Chrome, and
@@ -2606,8 +2653,11 @@ index 000000000..3d39de4ec
 +
 +Original transcripts are protected in both modes. Sending text first creates a
 +local copy through the existing ChatV2 submit coordinator. Voice and edit actions
-+require Continue in Phase Pal first. The banner names the source, explains that
-+changes cannot sync back, and offers View synced original. Web sources also offer
++require Continue in Phase Pal first. Locally handled control commands, research,
++and direct speech keep their current target without creating a copy. Normal
++submits capture their target after the writable copy is ready. The banner names
++the source, explains that changes cannot sync back, and offers View synced
++original. Web sources also offer
 +Open in ChatGPT or Claude. Local sources do not use an invented deep link.
 +Copies have independent session/message IDs and can belong to another character.
 +Core write guards and provider-dispatch guards protect originals. Whole-chat
@@ -3940,6 +3990,63 @@ bxYdrobr(RC7cDi&00000NkvXXu0mjf0TuK6
 literal 0
 HcmV?d00001
 
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2SubmitCoordinatorTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2SubmitCoordinatorTests.cs
+index 4cfb7ba0f..9b5dd811e 100644
+--- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2SubmitCoordinatorTests.cs	
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2SubmitCoordinatorTests.cs	
+@@ -58,6 +58,8 @@ namespace PhasePal.Tests.ChatV2.EditMode
+                 },
+                 artifactStore: new PhasePal.Services.Artifacts.Domain.PhasePalArtifactStore(
+                     () => artifactRoot, () => artifactRoot));
++            coordinator.PrepareExternalConversation = () =>
++                throw new InvalidOperationException("Research must not branch the open synced chat.");
+             await coordinator.SubmitTextAsync("/research a question");
+             Assert.AreEqual(1, researchCalls);
+         }
+@@ -106,6 +108,8 @@ namespace PhasePal.Tests.ChatV2.EditMode
+                 syncWaitingState: () => waitingCalls++,
+                 compaction: compaction);
+ 
++            coordinator.PrepareExternalConversation = () =>
++                throw new InvalidOperationException("Compaction must not branch the open synced chat.");
+             await coordinator.SubmitTextAsync("/compact");
+ 
+             Assert.AreEqual(1, client.RequestIds.Count);
+@@ -1237,6 +1241,34 @@ namespace PhasePal.Tests.ChatV2.EditMode
+             Assert.AreEqual(1, released);
+         }
+ 
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task SubmitText_ExternalPreparationCapturesWritableTargetAndPreservesNativeTarget(bool createCopy)
++        {
++            string session = "native-chat";
++            var messages = new ChatV2MessageStore();
++            var executor = new RecordingRouteExecutor(ChatV2RuntimeRoute.Cloud);
++            var ownership = new ChatV2SubmitOwnershipArbiter();
++            var coordinator = CreateCoordinator(messages, new ChatV2StatusService(), _ => Available(),
++                _ => Task.FromResult(ChatV2SubmitInterceptionResult.NotHandled), () => { }, () => { }, _ => false,
++                () => CreateOrchestrator(ownership, executor),
++                CreateTargetedRequestFactory(() => "character-a", () => session));
++            int preparations = 0;
++            coordinator.PrepareExternalConversation = () =>
++            {
++                preparations++;
++                if (createCopy) session = "local-copy";
++                return Task.FromResult(true);
++            };
++
++            await coordinator.SubmitTextAsync("Continue this conversation");
++            await WaitUntil(() => executor.CallCount == 1);
++
++            Assert.That(preparations, Is.EqualTo(1));
++            Assert.That(executor.LastTargetSessionId, Is.EqualTo(createCopy ? "local-copy" : "native-chat"));
++            ownership.Release(ChatV2RuntimeId.ChatV2, executor.LastRequestId);
++        }
++
+         [Test]
+         public async Task SubmitText_NavigationDuringOnboardingPreflightDoesNotDispatchToNewSession()
+         {
 diff --git a/plans/open-source-asset-scope-inventory-2026-06-28.md b/plans/open-source-asset-scope-inventory-2026-06-28.md
 index 97a593fa1..c7ed375f6 100644
 --- a/plans/open-source-asset-scope-inventory-2026-06-28.md

@@ -28,10 +28,14 @@ Loading the extension alone does not update an installed Phase Pal binary.
 - One protected original per provider/account/conversation, with separate home
   assignment. Changing the pairing target affects new chats.
 - Sharing changes visibility; it does not change sync choices or source identity.
-- History rows and the chat header show Phase Pal or the imported source, with
-  Synced/Local copy labels. Badges use conversation ownership rather than model
+- History rows use compact source icons for imported chats, with source and
+  Synced/Local copy status on hover. Native rows have no badge. The chat header
+  keeps source/status labels. Badges use conversation ownership rather than model
   selection, and follow the current theme and active-history-row colors.
 - Sending text creates an independent local copy through the existing submit flow.
+- Locally handled controls, research and direct speech keep their current target
+  without creating a copy. Conversation submits capture the writable target after
+  copy preparation.
 - Banners name the source and offer View synced original; web sources also offer
   Open in ChatGPT/Claude. Voice and edits require Continue in Phase Pal first.
 - Deleted originals stay deleted; unexpected local changes cause conflicts.
@@ -45,6 +49,12 @@ The full contract, source paths, limits, and lifecycle are in the patched
 Python script, hstry database, or additional Unity package is required.
 
 ## Verification
+
+The [2026-10-13 compatibility audit](COMPATIBILITY_AUDIT_20261013.md) checked the
+recent existing-user chat fixes against this integration. It fixed control
+commands creating unnecessary copies and passed 629 distinct direct fixture
+cases in the existing Editor. Live user flows and packaged builds remain to be
+checked. This was not a Unity Test Runner run.
 
 Two agent review rounds covered application sync, the extension, and UI integration.
 Fixes passed 54 managed cases, 34 Node cases, and the existing 25 offline Python
