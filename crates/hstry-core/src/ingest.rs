@@ -351,7 +351,22 @@ mod tests {
         let db = Arc::try_unwrap(db)
             .unwrap_or_else(|_| panic!("all ingestion tasks should release the database"));
         db.close().await;
-        std::fs::remove_file(path)?;
+        // Windows can briefly retain a sharing lock after pool shutdown. Retry
+        // only that cleanup error; persistent locks and other errors still fail.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            match std::fs::remove_file(&path) {
+                Ok(()) => break,
+                Err(error)
+                    if cfg!(windows)
+                        && error.raw_os_error() == Some(32)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
     }
 
