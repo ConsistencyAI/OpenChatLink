@@ -4,9 +4,23 @@
   "name": "OpenChatLink for Phase Pal",
   "version": "0.5.0",
   "description": "Sync ChatGPT, Claude, local Codex, and Claude Code histories into Phase Pal.",
+  "icons": {
+    "16": "assets/openchatlink-16.png",
+    "32": "assets/openchatlink-32.png",
+    "48": "assets/openchatlink-48.png",
+    "128": "assets/openchatlink-128.png"
+  },
   "permissions": ["alarms", "storage"],
   "host_permissions": ["https://chatgpt.com/*", "https://claude.ai/*", "http://127.0.0.1/*"],
   "background": {"service_worker": "background.js", "type": "module"},
   "options_page": "options.html",
-  "action": {"default_title": "OpenChatLink — choose chats and sync options"}
+  "action": {
+    "default_title": "OpenChatLink — choose chats and sync options",
+    "default_icon": {
+      "16": "assets/openchatlink-16.png",
+      "32": "assets/openchatlink-32.png",
+      "48": "assets/openchatlink-48.png",
+      "128": "assets/openchatlink-128.png"
+    }
+  }
 }
