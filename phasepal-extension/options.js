@@ -1,6 +1,31 @@
 import {conversationKey, normalizePreferences} from './preferences.js';
 
 const el = id => document.getElementById(id);
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+let themePreference = 'system';
+function applyTheme(value) {
+  themePreference = ['light', 'dark', 'system'].includes(value) ? value : 'system';
+  document.documentElement.dataset.theme = themePreference === 'system'
+    ? systemTheme.matches ? 'dark' : 'light' : themePreference;
+  el('theme').value = themePreference;
+}
+applyTheme('system');
+systemTheme.addEventListener('change', () => {
+  if (themePreference === 'system') applyTheme('system');
+});
+el('theme').addEventListener('change', async () => {
+  const previous = themePreference;
+  const value = el('theme').value;
+  applyTheme(value);
+  el('theme').disabled = true;
+  el('theme-error').textContent = '';
+  try {await chrome.storage.local.set({theme: value});}
+  catch {
+    applyTheme(previous);
+    el('theme-error').textContent = 'Theme could not be saved. Try again.';
+  }
+  finally {el('theme').disabled = false;}
+});
 let selected = new Map(), rows = new Map(), cursor = null, loaded = false, listing = false, dirty = false, busy = false, source = 'chatgpt';
 function visibility() {
   el('picker').hidden = el('chats').value !== 'selected';
@@ -106,6 +131,7 @@ el('full').addEventListener('click', () => act(() => request({type: 'sync', full
 el('disconnect').addEventListener('click', () => act(() => request({type: 'disconnect'})));
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+  if (changes.theme) applyTheme(changes.theme.newValue);
   if (changes[`preferences:${source}`] && !dirty) loadPreferences(changes[`preferences:${source}`].newValue);
   void renderStatus();
 });
@@ -124,5 +150,6 @@ async function changeSource() {
   await renderStatus();
 }
 el('source').addEventListener('change', () => {void changeSource();});
+applyTheme((await chrome.storage.local.get('theme')).theme);
 await changeSource();
 await renderStatus();
