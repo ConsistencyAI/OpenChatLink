@@ -122,7 +122,10 @@ mod tests {
             readable_id: None,
             platform_id: None,
             title: Some("My chat".into()),
-            created_at: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            created_at: Local
+                .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
+                .unwrap()
+                .with_timezone(&Utc),
             updated_at: None,
             model: Some("gpt".into()),
             provider: None,
@@ -139,7 +142,7 @@ mod tests {
             fork_type: None,
         };
         let md = session_markdown(Some(&conv), &[msg(MessageRole::User, "x")]);
-        assert!(md.starts_with("# My chat\n\n- Created: 2026-01-02 "));
+        assert!(md.starts_with("# My chat\n\n- Created: 2026-01-02 03:04\n"));
         assert!(md.contains("- Source: src\n- Model: gpt\n- Messages: 1\n\n## User\n\nx\n"));
     }
 }

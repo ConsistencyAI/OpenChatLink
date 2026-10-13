@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
@@ -61,13 +62,13 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Check workspace
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
 
       - name: Lint workspace
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --locked -- -D warnings
 
       - name: Test workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   adapter-tests:
     name: Adapter fixtures
