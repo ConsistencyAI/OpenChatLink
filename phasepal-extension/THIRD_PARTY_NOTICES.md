@@ -17,5 +17,13 @@ comes from the referenced Phase Pal website's next/font Google Fonts output.
 Copyright 2024 The Montserrat.Git Project Authors.
 Source: https://github.com/JulietaUla/Montserrat
 SIL Open Font License 1.1; see assets/Montserrat-OFL.txt.
-The Phase Pal logo in assets/phase-pal-logo.svg is the existing Phase Pal website
-brand asset, reused for this first-party integration at the owner's request.
+The Phase Pal logo in assets/phase-pal-logo.svg is the current website's
+phase-pal-v2-bunny-outline.svg brand asset, reused for this first-party
+integration at the owner's request.
+
+The source marks in assets/openai.svg, assets/claude.svg, assets/codex.svg,
+and assets/claudecode.svg come from Lobe Icons.
+Source: https://github.com/lobehub/lobe-icons
+Revision: 05a9b8c41e4735a4a2b6d2f1e43574bd8ec6c8cb.
+Copyright (c) 2023 LobeHub. MIT license; see assets/Lobe-Icons-LICENSE.txt.
+The marks identify supported products; their trademarks belong to their owners.

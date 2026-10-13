@@ -70,7 +70,6 @@
   --shadow: rgb(0 0 0 / 24%);
   --focus-ring: rgb(145 188 255 / 60%);
 }
-:root[data-theme="dark"] .brand img { filter: invert(1); }
 
 * { box-sizing: border-box; }
 body {
@@ -94,21 +93,24 @@ body {
 .theme-error { font-size: 11px; color: var(--muted); }
 .theme-error:empty { display: none; }
 .brand { gap: 12px; font-size: 18px; font-weight: 750; }
-.brand img { flex-shrink: 0; }
+.brand-mark { display: block; flex-shrink: 0; width: 30px; height: 40px; background: var(--blue); mask: url("assets/phase-pal-logo.svg") center / contain no-repeat; }
 .brand-divider { height: 24px; width: 1px; background: var(--border); margin-inline: 4px; }
 .product-name { font-size: 14px; font-weight: 550; color: var(--muted); }
-.product-tag { font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; padding: 7px 12px; border: 1px solid var(--card-border); border-radius: 20px; background: var(--surface); }
 .intro { padding: 44px 0 32px; }
-.eyebrow { color: var(--blue); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 12px; }
 h1 { font-size: clamp(34px, 4.7vw, 48px); line-height: 1.12; letter-spacing: -.045em; font-weight: 750; margin: 0 0 16px; }
 h1 span { color: var(--blue); }
 .intro-description { color: var(--muted); max-width: 620px; font-size: 15px; margin: 0; }
-.source-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-.source-tags span { padding: 4px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; font-weight: 600; color: var(--soft-ink); }
+.source-icons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.source-icon { display: grid; place-items: center; width: 42px; height: 42px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; }
+.source-mark { width: 24px; height: 24px; background: var(--soft-ink); mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
+.source-chatgpt { mask-image: url("assets/openai.svg"); }
+.source-claude { mask-image: url("assets/claude.svg"); }
+.source-codex { mask-image: url("assets/codex.svg"); }
+.source-claude-code { mask-image: url("assets/claudecode.svg"); }
 .card { min-width: 0; border: 1px solid var(--card-border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 18px 48px var(--shadow); padding: 26px; }
 .connection-card { margin-bottom: 22px; }
 .card-heading { justify-content: space-between; gap: 18px; margin-bottom: 18px; }
-.heading-with-icon { align-items: flex-start; gap: 13px; }
+.heading-with-icon { align-items: center; gap: 13px; }
 .section-icon { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border: 1px solid var(--border); background: var(--blue-soft); color: var(--blue); border-radius: 12px; }
 svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; width: 20px; height: 20px; flex-shrink: 0; }
 h2 { font-size: 17px; line-height: 1.4; font-weight: 750; letter-spacing: -.025em; margin: 0 0 4px; }
@@ -129,7 +131,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-v
 input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var(--blue); }
 select { appearance: none; padding-right: 34px; text-overflow: ellipsis; cursor: pointer; }
 .select-wrap, .search-wrap { position: relative; }
-.select-arrow { position: absolute; right: 13px; top: 50%; transform: translateY(-60%); font: 21px/1 "Segoe UI", sans-serif; color: var(--muted); pointer-events: none; }
+.select-arrow { position: absolute; width: 16px; height: 16px; right: 12px; top: 50%; transform: translateY(-50%); stroke-width: 2; color: var(--muted); pointer-events: none; }
 .search-wrap svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--muted); pointer-events: none; }
 .search-wrap input { padding-left: 38px; }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 42px; border: 1px solid transparent; border-radius: 11px; padding: 10px 16px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; transition: background-color 150ms, border-color 150ms, box-shadow 150ms, transform 150ms; }
@@ -199,13 +201,11 @@ footer { display: flex; justify-content: center; gap: 10px; padding: 28px 0 0; c
 @media (max-width: 559px) {
   .page { width: calc(100% - 28px); padding-top: 20px; }
   .brand { gap: 8px; font-size: 16px; }
-  .brand img { width: 28px; height: 28px; }
+  .brand-mark { width: 24px; height: 32px; }
   .brand-divider { margin-inline: 2px; }
   .product-name { font-size: 11px; }
-  .product-tag { display: none; }
   .intro { padding: 32px 2px 24px; }
   .intro-description { font-size: 13px; }
-  .eyebrow { font-size: 9px; }
   .card { padding: 20px; border-radius: 20px; }
   .card-heading { flex-wrap: wrap; gap: 12px; }
   .connection-state { margin-left: 53px; }
