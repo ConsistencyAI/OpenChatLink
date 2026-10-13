@@ -35,8 +35,9 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
     else await api.alarms.clear(CONTINUE);
   }
   const ready = (async () => {
-    const {status, batchPending} = await api.storage.local.get(['status', 'batchPending']);
+    const {status, batchPending, activity} = await api.storage.local.get(['status', 'batchPending', 'activity']);
     if (status?.running) await writeStatus(batchPending ? 'Waiting for the next batch; Chrome must stay open.' : 'The previous sync was interrupted. Select Sync now to retry.', Boolean(batchPending));
+    else if (batchPending && !activity?.length) await writeStatus('Updated worker loaded. Waiting for the next batch; Chrome must stay open.', true);
     await schedule();
   })();
 

@@ -201,3 +201,13 @@ test('activity is bounded and provider URLs are excluded from failures', async (
   assert.match(api.state.status.message, /could not be read/);
   assert.ok(!JSON.stringify(api.state.activity).includes('private-id'));
 });
+
+
+test('updating from a worker with no activity log reports the pending continuation', async () => {
+  const {api, controller} = setup({code, preferences: {chats: 'all', schedule: 'manual'}, batchPending: true,
+    status: {running: false, message: 'Sync is continuing with the next batch…'}}, async () => assert.fail('must wait for the alarm'));
+  await controller.ready;
+  assert.equal(api.state.status.running, true);
+  assert.match(api.state.activity[0].message, /Updated worker loaded/);
+  assert.equal(api.alarms.has(CONTINUE), true);
+});

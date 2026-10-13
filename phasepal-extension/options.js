@@ -1,6 +1,22 @@
+import {WORKER_REVISION} from './worker-version.js';
 import {conversationKey, normalizePreferences} from './preferences.js';
 
 const el = id => document.getElementById(id);
+let workerReady = false;
+const workerWarning = 'The sync worker is outdated or not responding. Reload the extension, then reopen this page. Refreshing this page alone does not update the worker.';
+async function checkWorker() {
+  let timer;
+  try {
+    const response = await Promise.race([
+      chrome.runtime.sendMessage({type: 'worker-info'}),
+      new Promise(resolve => {timer = setTimeout(() => resolve(null), 3000);}),
+    ]);
+    workerReady = response?.revision === WORKER_REVISION;
+  } catch {workerReady = false;}
+  finally {clearTimeout(timer);}
+  await renderStatus();
+}
+el('reload-extension').addEventListener('click', () => chrome.runtime.reload());
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
 let themePreference = 'system';
 function applyTheme(value) {
@@ -94,15 +110,18 @@ async function renderStatus() {
   document.querySelector('.save-bar').dataset.running = String(Boolean(status?.running));
   el('connection-state').dataset.paired = String(Boolean(code));
   el('connection-label').textContent = code ? 'Pairing saved' : 'Not paired';
-  el('status').textContent = dirty ? 'You have unsaved sync options. Select Save sync options.'
+  el('reload-extension').hidden = workerReady;
+  el('activity-empty').textContent = workerReady ? 'No activity recorded yet. Select Sync now to start.' : workerWarning;
+  el('status').textContent = !workerReady ? workerWarning : dirty ? 'You have unsaved sync options. Select Save sync options.'
     : status?.message ?? (code ? 'Pairing saved. Choose chats and save your sync options.' : 'Not connected.');
-  el('sync').disabled = !code || Boolean(status?.running) || dirty || busy;
+  el('sync').disabled = !workerReady || !code || Boolean(status?.running) || dirty || busy;
   el('full').disabled = el('sync').disabled;
-  el('connect').disabled = busy;
-  el('save').disabled = busy;
+  el('connect').disabled = busy || !workerReady;
+  el('save').disabled = busy || !workerReady;
   el('source').disabled = busy || listing;
 }
 async function request(message) {
+  if (!workerReady) throw new Error(workerWarning);
   const result = await chrome.runtime.sendMessage({...message, source});
   if (!result?.ok) throw new Error(result?.error ?? 'Could not complete this action.');
   return result;
@@ -177,5 +196,6 @@ async function changeSource() {
 }
 el('source').addEventListener('change', () => {void changeSource();});
 applyTheme((await chrome.storage.local.get('theme')).theme);
+await checkWorker();
 await changeSource();
 await renderStatus();
