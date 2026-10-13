@@ -1,25 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
   <title>OpenChatLink</title>
   <defs>
-    <linearGradient id="rings" x1="108" y1="23" x2="108" y2="191" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ff4b55"/>
-      <stop offset=".3" stop-color="#e45e9e"/>
-      <stop offset=".65" stop-color="#7967ed"/>
-      <stop offset="1" stop-color="#4285ff"/>
-    </linearGradient>
-    <linearGradient id="handle" x1="178" y1="178" x2="236" y2="236" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7967ed"/>
-      <stop offset="1" stop-color="#4285ff"/>
-    </linearGradient>
+    <radialGradient id="rings" cx="108" cy="108" r="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#dcffd0"/>
+      <stop offset=".45" stop-color="#9bfaac"/>
+      <stop offset=".75" stop-color="#35db80"/>
+      <stop offset="1" stop-color="#11a960"/>
+    </radialGradient>
     <radialGradient id="depth" cx="108" cy="108" r="85" gradientUnits="userSpaceOnUse">
-      <stop offset=".35" stop-color="#080b1b"/>
-      <stop offset=".62" stop-color="#182147"/>
-      <stop offset="1" stop-color="#30385f"/>
+      <stop offset=".35" stop-color="#06130d"/>
+      <stop offset=".62" stop-color="#0c291a"/>
+      <stop offset="1" stop-color="#15422a"/>
     </radialGradient>
   </defs>
-  <path d="m171 171 62 62" stroke="#172643" stroke-width="38" stroke-linecap="round"/>
-  <path d="m174 174 59 59" stroke="url(#handle)" stroke-width="22" stroke-linecap="round"/>
-  <circle cx="108" cy="108" r="94" fill="#101a30"/>
+  <path d="m171 171 62 62" stroke="#103823" stroke-width="38" stroke-linecap="round"/>
+  <path d="m174 174 59 59" stroke="url(#rings)" stroke-width="22" stroke-linecap="round"/>
+  <circle cx="108" cy="108" r="94" fill="#09261a"/>
   <circle cx="108" cy="108" r="85" fill="url(#depth)"/>
   <g stroke="url(#rings)">
     <circle cx="108" cy="108" r="84" stroke-width="5"/>
