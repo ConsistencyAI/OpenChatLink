@@ -1144,7 +1144,7 @@ index 7c00eeaa2..e3f21c3d8 100644
          public ChatV2RuntimeAvailabilityStore RuntimeAvailability { get; set; }
          public ChatV2PlayerPrefsSettingsFacade Settings { get; set; }
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
-index e54922854..da2b3ca8f 100644
+index e54922854..9416402c4 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
 @@ -147,6 +147,11 @@ namespace PhasePal.Services.ChatV2.Platform
@@ -1218,17 +1218,31 @@ index e54922854..da2b3ca8f 100644
              _uploadCoordinator = composition.UploadCoordinator;
              _activationLifecycle = composition.ActivationLifecycle;
              _voiceInput = composition.VoiceInput;
-@@ -3018,6 +3038,109 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -3018,6 +3038,123 @@ namespace PhasePal.Services.ChatV2.Platform
              previousCapture?.Stop();
          }
  
 +        private bool ExternalHistoryConsent => PhasePalServices.Resolve<global::ISettingsService>()?.CurrentSettings?.storeChatHistory ?? false;
 +
++        /// <summary>Hosts the same settings in Library while retaining this runtime's services and submit owner.</summary>
++        public PhasePal.Services.InGameSettings.Core.ILibrarySharedSettingsHost CreateLibrarySettingsHost(
++            UnityEngine.UIElements.VisualElement root, Action close, Action showLibraryOptions)
++        {
++            InitializeIfNeeded();
++            if (_runtimeActions == null)
++                throw new InvalidOperationException("The shared settings services are not ready.");
++            EnsureShellEventHandlerFactory();
++            return new ChatV2LibrarySharedSettingsHost(root, _runtimeActions,
++                _shellEventHandlerFactory.CreateSettingsSurfaceFactory(), close, showLibraryOptions,
++                PhasePalServices.Resolve<global::IHotkeyService>(), _externalConversations,
++                HandleExternalConversationToggle, () => _status?.Current, PlayClickSound);
++        }
++
 +        private void ConfigureExternalConversations()
 +        {
 +            _shell?.ConfigureExternalConversations(_externalConversations, HandleExternalConversationToggle,
 +                HandleExternalConversationCopy, original => _historyCoordinator?.TryOpenSession(original,
-+                    _externalConversations?.GetSessionInfo(original)?.CharacterId));
++                    _externalConversations?.GetSessionInfo(original)?.CharacterId), PlayClickSound);
 +        }
 +
 +        private async void HandleExternalConversationToggle(bool enabled)
@@ -1328,7 +1342,7 @@ index e54922854..da2b3ca8f 100644
          private void RebuildSubmitOrchestrator()
          {
              if (_compositionService == null)
-@@ -3062,6 +3185,7 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -3062,6 +3199,7 @@ namespace PhasePal.Services.ChatV2.Platform
                  TurnLifecycleFinished = HandleAgentGatewayPresenceTurnFinished
              });
  
@@ -1336,6 +1350,61 @@ index e54922854..da2b3ca8f 100644
              RefreshAgentGatewayPresenceRoute();
          }
  
+@@ -4879,7 +5017,7 @@ namespace PhasePal.Services.ChatV2.Platform
+             if (provider != ChatV2AgentGatewayPresenceProvider.ChatGpt)
+             {
+                 lines.Add("Usage limits: not reported through this connection. Check your provider account.");
+-                _shell.ApplyAgentGatewayDetails(string.Join("\n", lines));
++                _shell.ApplyAgentGatewayDetails(string.Join("\n", lines.Select(line => global::UiLocalizationUtility.LocalizeKnownUiMessage(line, ChatV2Localization.Resolve))));
+                 return;
+             }
+             ChatGptUsageSnapshot usage = _runtimeActions?.ChatGptUsage;
+@@ -4892,10 +5030,14 @@ namespace PhasePal.Services.ChatV2.Platform
+                 bool multipleBuckets = usage.Windows.Select(window => window.Bucket).Distinct().Count() > 1;
+                 foreach (ChatGptUsageWindow window in usage.Windows.Take(4))
+                 {
+-                    string duration = window.WindowMinutes % 1440 == 0 ? (window.WindowMinutes / 1440) + " day"
+-                        : window.WindowMinutes % 60 == 0 ? (window.WindowMinutes / 60) + " hour"
+-                        : window.WindowMinutes + " minute";
+-                    string bucket = multipleBuckets ? "Limit " + window.Bucket + " · " : string.Empty;
++                    string duration = window.WindowMinutes % 1440 == 0
++                        ? string.Format(ChatV2Localization.Resolve("ChatV2_Usage_DaysFormat_Key", "{0} day"), window.WindowMinutes / 1440)
++                        : window.WindowMinutes % 60 == 0
++                            ? string.Format(ChatV2Localization.Resolve("ChatV2_Usage_HoursFormat_Key", "{0} hour"), window.WindowMinutes / 60)
++                            : string.Format(ChatV2Localization.Resolve("ChatV2_Usage_MinutesFormat_Key", "{0} minute"), window.WindowMinutes);
++                    string bucket = multipleBuckets
++                        ? string.Format(ChatV2Localization.Resolve("ChatV2_Usage_BucketFormat_Key", "Limit {0} · "), window.Bucket)
++                        : string.Empty;
+                     lines.Add(bucket + string.Format(ChatV2Localization.Resolve("ChatV2_ChatGpt_UsageWindowFormat_Key",
+                         "{0} limit: {1:0.#}% remaining"), duration, window.RemainingPercent));
+                     lines.Add(window.ResetsAt.HasValue
+@@ -4909,7 +5051,7 @@ namespace PhasePal.Services.ChatV2.Platform
+                 lines.Add(string.Format(ChatV2Localization.Resolve("ChatV2_ChatGpt_LastCheckedFormat_Key", "Checked: {0}"),
+                     usage.FetchedAt.ToLocalTime().ToString("g")));
+             }
+-            _shell.ApplyAgentGatewayDetails(string.Join("\n", lines));
++            _shell.ApplyAgentGatewayDetails(string.Join("\n", lines.Select(line => global::UiLocalizationUtility.LocalizeKnownUiMessage(line, ChatV2Localization.Resolve))));
+         }
+ 
+         private ChatV2SlashCommandSuggestionContext BuildSlashCommandSuggestionContext()
+@@ -5123,7 +5265,7 @@ namespace PhasePal.Services.ChatV2.Platform
+                     choices.Add(new ChatV2SlashCommandArgumentChoice(
+                         choice.Value,
+                         choice.DisplayLabel,
+-                        choice.Description,
++                        global::UiLocalizationUtility.LocalizeKnownUiMessage(choice.Description, ChatV2Localization.Resolve),
+                         choice.InsertText,
+                         IsSelectedProviderModelChoice(
+                             choice.Value,
+@@ -5136,7 +5278,7 @@ namespace PhasePal.Services.ChatV2.Platform
+                     target,
+                     command.CommandText,
+                     command.DisplayLabel,
+-                    command.Description,
++                    global::UiLocalizationUtility.LocalizeKnownUiMessage(command.Description, ChatV2Localization.Resolve),
+                     command.InsertText,
+                     choices));
+             }
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs
 index 1a6bb87c5..7048f8199 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
@@ -1392,10 +1461,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..69881c5d7
+index 000000000..f2b5ca7e4
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,205 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1409,6 +1478,7 @@ index 000000000..69881c5d7
 +        private IChatV2ExternalConversations _service;
 +        private VisualElement _group, _banner, _header, _headerOrigin, _boundRoot;
 +        private Action _refreshHistoryOrigins;
++        private Action _playClickSound;
 +        private Toggle _toggle;
 +        private Label _status, _bannerText;
 +        private Button _copyCode, _continueHere, _viewOriginal, _openSource;
@@ -1420,13 +1490,14 @@ index 000000000..69881c5d7
 +        public bool IsBound => _boundRoot != null;
 +        private static string Text(string key, string fallback) => ChatV2Localization.Resolve(key, fallback);
 +        public void Bind(VisualElement root, IChatV2ExternalConversations service, Action<bool> toggle,
-+            Action continueHere, Action<string> viewOriginal, Action refreshHistoryOrigins = null)
++            Action continueHere, Action<string> viewOriginal, Action refreshHistoryOrigins = null, Action playClickSound = null)
 +        {
 +            Dispose();
 +            if (root == null) return;
 +            _boundRoot = root;
 +            _service = service;
 +            _refreshHistoryOrigins = refreshHistoryOrigins;
++            _playClickSound = playClickSound;
 +            _header = root.Q<VisualElement>("chat-v2-header");
 +            if (_header != null)
 +            {
@@ -1467,7 +1538,7 @@ index 000000000..69881c5d7
 +            _toggle = new Toggle(Text("ChatV2_ExternalConversations_EnableSources_Key", "Sync external conversations"))
 +                { name = "chat-v2-settings-external-conversations-enabled" };
 +            _toggle.AddToClassList("chat-v2-settings-toggle");
-+            _toggle.RegisterValueChangedCallback(evt => toggle?.Invoke(evt.newValue)); syncRow.Add(_toggle);
++            _toggle.RegisterValueChangedCallback(evt => { _playClickSound?.Invoke(); toggle?.Invoke(evt.newValue); }); syncRow.Add(_toggle);
 +            _group.Add(syncRow);
 +            var connectionRow = new VisualElement { name = "chat-v2-settings-row-external-conversation-connection" };
 +            connectionRow.AddToClassList("chat-v2-settings-row");
@@ -1478,7 +1549,7 @@ index 000000000..69881c5d7
 +            _status = new Label(); _status.AddToClassList("chat-v2-settings-row__description"); connectionCopy.Add(_status);
 +            connectionRow.Add(connectionCopy);
 +            var connectionActions = new VisualElement(); connectionActions.AddToClassList("chat-v2-settings-actions");
-+            _copyCode = new Button(() => { string code = _service?.GetConnectionCode();
++            _copyCode = new Button(() => { _playClickSound?.Invoke(); string code = _service?.GetConnectionCode();
 +                if (!string.IsNullOrEmpty(code)) GUIUtility.systemCopyBuffer = code; })
 +                { name = "chat-v2-settings-external-conversations-copy-code",
 +                    text = Text("ChatV2_ExternalConversations_CopyCode_Key", "Copy connection code") };
@@ -1497,14 +1568,14 @@ index 000000000..69881c5d7
 +            _banner.AddToClassList("chat-v2-external-banner");
 +            _bannerText = new Label(); _bannerText.AddToClassList("chat-v2-external-banner-text"); _banner.Add(_bannerText);
 +            var actions = new VisualElement(); actions.AddToClassList("chat-v2-external-actions");
-+            _continueHere = new Button(() => continueHere?.Invoke())
++            _continueHere = new Button(() => { _playClickSound?.Invoke(); continueHere?.Invoke(); })
 +                { text = Text("ChatV2_ExternalConversations_Continue_Key", "Continue in Phase Pal") };
 +            actions.Add(_continueHere);
-+            _openSource = new Button(() => { string url = _service?.GetSessionInfo(_sessionId)?.SourceUrl;
++            _openSource = new Button(() => { _playClickSound?.Invoke(); string url = _service?.GetSessionInfo(_sessionId)?.SourceUrl;
 +                if (!string.IsNullOrEmpty(url)) Application.OpenURL(url); })
 +                { text = "Open original" };
 +            actions.Add(_openSource);
-+            _viewOriginal = new Button(() => { string original = _service?.GetSessionInfo(_sessionId)?.OriginalSessionId;
++            _viewOriginal = new Button(() => { _playClickSound?.Invoke(); string original = _service?.GetSessionInfo(_sessionId)?.OriginalSessionId;
 +                if (!string.IsNullOrEmpty(original)) viewOriginal?.Invoke(original); })
 +                { text = Text("ChatV2_ExternalConversations_ViewOriginal_Key", "View synced original") };
 +            actions.Add(_viewOriginal); _banner.Add(actions);
@@ -1563,6 +1634,7 @@ index 000000000..69881c5d7
 +            if (_header != null) _header.tooltip = _headerOriginalTooltip;
 +            _group = _banner = _header = _headerOrigin = _boundRoot = null; _service = null;
 +            _refreshHistoryOrigins = null;
++            _playClickSound = null;
 +        }
 +    }
 +
@@ -1633,9 +1705,19 @@ index 8bf176b59..96c5b1ea1 100644
      position: absolute;
      left: 0;
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
---- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
-@@ -128,6 +128,11 @@
+index cdc53ab40..6e824a2cb 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
+@@ -26,7 +26,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+     }
+ 
+     [RequireComponent(typeof(UIDocument))]
+-    public sealed class ChatV2ToolkitShellController : MonoBehaviour
++    public sealed class ChatV2ToolkitShellController : MonoBehaviour, IChatV2SettingsPanelView
+     {
+         private static readonly HashSet<string> OptionalShellElementRefProperties =
+             new HashSet<string>(StringComparer.Ordinal)
+@@ -128,6 +128,12 @@ namespace PhasePal.Services.ChatV2.Toolkit
          private readonly ChatV2CommandSuggestionPresenter _commandSuggestionPresenter = new ChatV2CommandSuggestionPresenter();
          private readonly ChatV2ConnectorComposerPresenter _connectorComposerPresenter = new ChatV2ConnectorComposerPresenter();
          private readonly ChatV2SettingsPanelPresenter _settingsPanelPresenter = new ChatV2SettingsPanelPresenter();
@@ -1643,11 +1725,12 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
 +        private IChatV2ExternalConversations _externalConversations;
 +        private Action<bool> _toggleExternalConversations;
 +        private Action _continueExternalConversation;
++        private Action _externalConversationClickSound;
 +        private Action<string> _viewExternalOriginal;
          private readonly ChatV2KeyboardShortcutSettingsPresenter _keyboardShortcutSettingsPresenter =
              new ChatV2KeyboardShortcutSettingsPresenter();
          private readonly ChatV2ChangeAvatarPanelPresenter _changeAvatarPanelPresenter = new ChatV2ChangeAvatarPanelPresenter();
-@@ -944,6 +949,7 @@
+@@ -944,6 +950,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              _connectorComposerPresenter.Dispose();
              _nativePermissionPresenter?.Dispose();
              _nativePermissionPresenter = null;
@@ -1655,7 +1738,7 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
              _settingsPanelPresenter.Dispose();
              _changeAvatarPanelPresenter.Dispose();
              _achievementsPanelPresenter.Dispose();
-@@ -1167,6 +1173,7 @@
+@@ -1167,6 +1174,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              if (_documentRoot == null)
              {
                  _transparentWindowInputRegionPublisher.Bind(null, null);
@@ -1663,15 +1746,15 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
                  _root = null;
                  _elementRefs = null;
                  ApplyElementRefs(null);
-@@ -1264,6 +1271,7 @@
+@@ -1264,6 +1272,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              using (BindHistoryPresenterMarker.Auto())
              {
                  _historyPresenter.Bind(_elementRefs, _windowLayoutController.GetRootBounds);
 +                _historyPresenter.SetSourceResolver(id => _externalConversations?.GetSessionInfo(id));
              }
-
+ 
              using (BindChromePresenterMarker.Auto())
-@@ -1381,6 +1389,7 @@
+@@ -1381,6 +1390,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              _connectorComposerPresenter.Dispose();
              _nativePermissionPresenter?.Dispose();
              _nativePermissionPresenter = null;
@@ -1679,7 +1762,16 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
              _settingsPanelPresenter.Dispose();
              _changeAvatarPanelPresenter.Dispose();
              _achievementsPanelPresenter.Dispose();
-@@ -2209,6 +2218,7 @@
+@@ -2106,7 +2116,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             _settingsPanelPresenter.ShowCategory(category);
+         }
+ 
+-        internal void RevealStoreChatHistorySetting()
++        public void RevealStoreChatHistorySetting()
+         {
+             EnsureSettingsPanelBound();
+             _settingsPanelPresenter.RevealStoreChatHistorySetting();
+@@ -2209,6 +2219,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
  
          private void EnsureSettingsPanelBound()
          {
@@ -1687,22 +1779,23 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
              using var ensureSettingsPanelBoundScope = EnsureSettingsPanelBoundMarker.Auto();
  
              if (_root == null || _settingsPanelPresenter.IsBound)
-@@ -2811,7 +2821,27 @@
+@@ -2811,9 +2822,31 @@ namespace PhasePal.Services.ChatV2.Toolkit
  
          public void ApplySession(ChatV2SessionSummary session)
          {
 +            EnsureExternalConversationsBound();
 +            _externalConversationPresenter.ApplySession(session?.SessionId, session?.SourceChannel);
              _chromePresenter.ApplySession(session);
-+        }
-+
+         }
+ 
 +        /// <summary>Binds external conversation settings and copy/source banner actions.</summary>
 +        public void ConfigureExternalConversations(IChatV2ExternalConversations service, Action<bool> toggle,
-+            Action continueHere, Action<string> viewOriginal)
++            Action continueHere, Action<string> viewOriginal, Action playClickSound = null)
 +        {
 +            _externalConversationPresenter.Dispose();
 +            _externalConversations = service; _toggleExternalConversations = toggle;
 +            _continueExternalConversation = continueHere; _viewExternalOriginal = viewOriginal;
++            _externalConversationClickSound = playClickSound;
 +            _historyPresenter.SetSourceResolver(id => _externalConversations?.GetSessionInfo(id));
 +            EnsureExternalConversationsBound();
 +        }
@@ -1711,10 +1804,13 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
 +        {
 +            if (!_externalConversationPresenter.IsBound && _root != null)
 +                _externalConversationPresenter.Bind(_root, _externalConversations, _toggleExternalConversations,
-+                    _continueExternalConversation, _viewExternalOriginal, _historyPresenter.RefreshSourceBadges);
-         }
-
++                    _continueExternalConversation, _viewExternalOriginal, _historyPresenter.RefreshSourceBadges,
++                    _externalConversationClickSound);
++        }
++
          public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
+         {
+             if (model == null)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
 index 000000000..ace0fb2aa
@@ -2583,10 +2679,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..7c3ba22b2
+index 000000000..471c61188
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,169 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink imports personal ChatGPT and Claude web chats through Chrome, and
@@ -2622,6 +2718,8 @@ index 000000000..7c3ba22b2
 +actually changed. No-change runs report zero updates. Successful manual sync
 +plays the existing notification sound through the app sound controls. There is
 +no separate sync sound setting.
++External conversation buttons and the sync toggle use the existing app click
++sound in both chat settings and shared Library settings. Settings refreshes are silent.
 +Automatic sync has no success toast or sound. A failure produces a warning toast;
 +repeated automatic failures for the same source are suppressed until recovery.
 +
@@ -3431,7 +3529,7 @@ index 821bec080..dfad87f8f 100644
 +    display: none;
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
-index 551dcc53e..e39a2c67d 100644
+index 551dcc53e..355a4de18 100644
 --- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
 @@ -441,6 +441,141 @@ namespace PhasePal.Tests.ChatV2.EditMode
@@ -3459,7 +3557,7 @@ index 551dcc53e..e39a2c67d 100644
 +            var external = (IDisposable)Activator.CreateInstance(type, true);
 +            try
 +            {
-+                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges, null });
 +                type.GetMethod("ApplySession").Invoke(external, new object[] { "session", null });
 +                foreach (string name in new[] { "chat-v2-history-origin-session", "chat-v2-header-origin" })
 +                {
@@ -3505,7 +3603,7 @@ index 551dcc53e..e39a2c67d 100644
 +            var external = (IDisposable)Activator.CreateInstance(type, true);
 +            try
 +            {
-+                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges, null });
 +                type.GetMethod("ApplySession").Invoke(external, new object[] { "session", null });
 +                service.Info = new ChatV2ExternalConversationInfo { SessionId = "session", SourceName = "Claude", OriginalSessionId = "original" };
 +                service.Notify();
@@ -3515,7 +3613,7 @@ index 551dcc53e..e39a2c67d 100644
 +                var icon = row.Q<VisualElement>("source-icon");
 +                Assert.That(icon.ClassListContains("chat-v2-history-origin-icon--claude"), Is.True);
 +                Assert.That(row.tooltip, Does.Contain("Claude").And.Contain("Local copy"));
-+                type.GetMethod("Bind").Invoke(external, new object[] { root, null, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("Bind").Invoke(external, new object[] { root, null, null, null, null, (Action)history.RefreshSourceBadges, null });
 +                type.GetMethod("ApplySession").Invoke(external, new object[] { "native", null });
 +                history.SetSourceResolver(null);
 +                Assert.That(service.Subscribers, Is.Zero);
@@ -3538,7 +3636,7 @@ index 551dcc53e..e39a2c67d 100644
 +            Type type = typeof(ChatV2HistoryPresenter).Assembly.GetType("PhasePal.Services.ChatV2.Toolkit.ChatV2ExternalConversationPresenter");
 +            var external = (IDisposable)Activator.CreateInstance(type, true);
 +            try {
-+                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, null });
++                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, null, null });
 +                VisualElement progress = root.Q<VisualElement>("chat-v2-external-sync-progress");
 +                Assert.That(root.Q<Toggle>("chat-v2-external-sync-sound"), Is.Null);
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.None));
@@ -4077,3 +4175,323 @@ index 97a593fa1..c7ed375f6 100644
 +| Assets | Owner and acquisition | License and notices | Classification |
 +|---|---|---|---|
 +| `Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/{chatgpt,claude,codex,claude-code}.png` | LobeHub; rasterized as transparent white 64-pixel PNGs from `openai.svg`, `claude.svg`, `codex.svg`, and `claudecode.svg` in https://github.com/lobehub/lobe-icons/tree/05a9b8c41e4735a4a2b6d2f1e43574bd8ec6c8cb/packages/static-svg/icons | MIT; local `SourceIcons/LICENSE.txt` and `SourceIcons/NOTICE.md`, aggregated in root `NOTICE`. Copyright (c) 2023 LobeHub. Product trademarks remain with their owners; use is nominative. | `third-party-reviewed`; generated UI images, redistributable with the license and notices. |
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LibrarySharedSettingsFactory.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LibrarySharedSettingsFactory.cs
+new file mode 100644
+index 000000000..a9a1be2c3
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LibrarySharedSettingsFactory.cs	
+@@ -0,0 +1,112 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LibrarySharedSettingsFactory.cs
++using UnityEngine;
++using UnityEngine.UIElements;
++using System;
++using PhasePal.Services.InGameSettings.Core;
++using PhasePal.Services.ChatV2.Toolkit;
++
++namespace PhasePal.Services.ChatV2.Platform
++{
++    /// <summary>Uses the single installed ChatV2 owner for settings opened from Library.</summary>
++    public sealed class ChatV2LibrarySharedSettingsFactory : ILibrarySharedSettingsFactory
++    {
++        public ILibrarySharedSettingsHost Create(VisualElement root, Action close, Action showLibraryOptions)
++        {
++            ChatV2RuntimeHostController host = FindHost();
++            if (host == null)
++            {
++                ChatV2RuntimeAutoBootstrapper.EnsureRuntimeHost(openAfterCreate: false);
++                host = FindHost();
++            }
++            if (host != null) return host.CreateLibrarySettingsHost(root, close, showLibraryOptions);
++            throw new InvalidOperationException("The shared application settings owner is unavailable.");
++        }
++
++        private static ChatV2RuntimeHostController FindHost()
++        {
++            foreach (var host in UnityEngine.Object.FindObjectsByType<ChatV2RuntimeHostController>(
++                         FindObjectsInactive.Include, FindObjectsSortMode.None))
++                if (host.gameObject.scene.IsValid() && host.gameObject.scene.isLoaded) return host;
++            return null;
++        }
++    }
++
++    internal sealed class ChatV2LibrarySharedSettingsHost : ILibrarySharedSettingsHost
++    {
++        private readonly ChatV2SharedSettingsPanelView _view;
++        private readonly ChatV2RuntimeActionCoordinator _actions;
++        private readonly Action _close;
++        private readonly Action _showLibraryOptions;
++        private readonly ChatV2ShellEventHandlerFactory _events;
++        private readonly Func<Core.ChatV2StatusEntry> _status;
++        private readonly VisualElement _root;
++        private IDisposable _viewLease;
++        private float _nextRefresh;
++        private bool _disposed;
++
++        public bool IsValid => !_disposed && !_view.IsDisposed;
++
++        public ChatV2LibrarySharedSettingsHost(VisualElement root, ChatV2RuntimeActionCoordinator actions,
++            ChatV2ShellEventHandlerFactory events, Action close, Action showLibraryOptions,
++            global::IHotkeyService hotkeys, Core.IChatV2ExternalConversations externalConversations,
++            Action<bool> toggleExternalConversations, Func<Core.ChatV2StatusEntry> status, Action playClickSound = null)
++        {
++            _root = root;
++            _actions = actions;
++            _close = close;
++            _showLibraryOptions = showLibraryOptions;
++            _events = events;
++            _status = status;
++            _view = new ChatV2SharedSettingsPanelView(root, hotkeys, externalConversations, toggleExternalConversations,
++                playClickSound);
++            ChatV2SettingsPanelEventBinder.Bind(_view.Presenter, events.CreateHandlers());
++            _view.CloseRequested += HandleClose;
++            _view.LibraryOptionsRequested += HandleLibraryOptions;
++        }
++
++        public void Open()
++        {
++            if (!IsValid) return;
++            _viewLease?.Dispose();
++            _viewLease = _actions.BindSettingsView(_view);
++            _actions.HandleSettingsRequested();
++            _view.ApplyStatus(_status?.Invoke());
++            _nextRefresh = Time.unscaledTime + 1f;
++        }
++
++        public void Close()
++        {
++            if (_disposed) return;
++            _view.CloseSettingsPanel();
++            _events.CancelFilePickers();
++            _events.ClearPendingSettingsAnalytics();
++            _viewLease?.Dispose();
++            _viewLease = null;
++        }
++
++        private void HandleClose() { Close(); _close?.Invoke(); }
++        private void HandleLibraryOptions() { Close(); _showLibraryOptions?.Invoke(); }
++
++        public void Tick()
++        {
++            if (!IsValid || !_view.IsSettingsPanelOpen) return;
++            for (VisualElement parent = _root; parent != null; parent = parent.parent)
++                if (parent.resolvedStyle.display == DisplayStyle.None) { Close(); return; }
++            _events.TickSettingsAnalytics();
++            _view.ApplyStatus(_status?.Invoke());
++            if (Time.unscaledTime < _nextRefresh) return;
++            _nextRefresh = Time.unscaledTime + 1f;
++            _actions.RefreshSettingsPanel();
++        }
++
++        public void Dispose()
++        {
++            if (_disposed) return;
++            Close();
++            _disposed = true;
++            _view.CloseRequested -= HandleClose;
++            _view.LibraryOptionsRequested -= HandleLibraryOptions;
++            _view.Dispose();
++        }
++    }
++}
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SharedSettingsPanelView.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SharedSettingsPanelView.cs
+new file mode 100644
+index 000000000..fa77664bd
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SharedSettingsPanelView.cs	
+@@ -0,0 +1,196 @@
++// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SharedSettingsPanelView.cs
++using UnityEngine;
++using UnityEngine.UIElements;
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using PhasePal.Services.ChatV2.Core;
++
++namespace PhasePal.Services.ChatV2.Toolkit
++{
++    /// <summary>Reuses the chat settings presentation in another document, without a composer or chat host.</summary>
++    public sealed class ChatV2SharedSettingsPanelView : IChatV2SettingsPanelView, IDisposable
++    {
++        private readonly VisualElement _root;
++        private readonly ChatV2KeyboardShortcutSettingsPresenter _shortcuts = new ChatV2KeyboardShortcutSettingsPresenter();
++        private readonly ChatV2ExternalConversationPresenter _external = new ChatV2ExternalConversationPresenter();
++        private readonly ChatV2DropdownStyleBridge _dropdowns = new ChatV2DropdownStyleBridge();
++        private readonly global::IHotkeyService _hotkeys;
++        private readonly Button _closeButton;
++        private readonly Button _libraryButton;
++        private readonly Label _status;
++        private IDisposable _localeSubscription;
++        private CancellationTokenSource _languageLifetime;
++        private bool _disposed;
++
++        public ChatV2SettingsPanelPresenter Presenter { get; } = new ChatV2SettingsPanelPresenter();
++        public bool IsSettingsPanelOpen => !_disposed && Presenter.IsOpen;
++        public bool IsDisposed => _disposed;
++        public event Action CloseRequested;
++        public event Action LibraryOptionsRequested;
++
++        /// <summary>Binds the existing settings template and its shared service-backed editors.</summary>
++        public ChatV2SharedSettingsPanelView(VisualElement root, global::IHotkeyService hotkeys,
++            IChatV2ExternalConversations externalConversations, Action<bool> toggleExternalConversations,
++            Action playClickSound = null)
++        {
++            _root = root ?? throw new ArgumentNullException(nameof(root));
++            _hotkeys = hotkeys;
++            VisualElement window = root.Q<VisualElement>("chat-v2-window");
++            VisualElement header = root.Q<VisualElement>("chat-v2-header");
++            VisualElement panel = root.Q<VisualElement>("chat-v2-settings-panel");
++            if (window == null || header == null || panel == null)
++                throw new InvalidOperationException("The shared settings template is incomplete.");
++
++            // Keep only settings presentation. No composer, transcript, or submit callbacks are hosted here.
++            header.RemoveFromHierarchy();
++            panel.RemoveFromHierarchy();
++            window.Clear();
++            window.Add(header);
++            window.Add(panel);
++            _status = new Label { name = "library-settings-status", pickingMode = PickingMode.Ignore };
++            _status.AddToClassList("library-settings-status");
++            _status.AddToClassList("chat-v2-settings-row__description");
++            _status.style.display = DisplayStyle.None;
++            window.Add(_status);
++            Presenter.Bind(root);
++            Presenter.BackRequested += RequestClose;
++            Presenter.McpApprovalSurfaceRequested += HandleMcpApproval;
++            _dropdowns.Bind(root, root);
++            root.RegisterCallback<KeyDownEvent>(HandleShortcutKeyDown, TrickleDown.TrickleDown);
++            root.RegisterCallback<KeyDownEvent>(HandleEscape);
++            if (externalConversations != null)
++                _external.Bind(root, externalConversations, toggleExternalConversations, null, null,
++                    playClickSound: playClickSound);
++
++            _closeButton = root.Q<Button>("chat-v2-close");
++            if (_closeButton != null) _closeButton.clicked += RequestClose;
++            _libraryButton = new Button(() => LibraryOptionsRequested?.Invoke())
++            {
++                name = "library-settings-library-options",
++                text = ChatV2Localization.Resolve("ChatV2_LibraryOptions_Key", "Library options")
++            };
++            _libraryButton.AddToClassList("chat-v2-settings-category");
++            root.Q<ScrollView>("chat-v2-settings-sidebar")?.contentContainer.Add(_libraryButton);
++            _localeSubscription = ChatV2Localization.RegisterSelectedLocaleChanged(_ => RefreshLocalization());
++            ChatV2Localization.StringsReady += RefreshLocalization;
++        }
++
++        private void RefreshLocalization()
++        {
++            if (_disposed) return;
++            Presenter.ApplyLocalization();
++            _libraryButton.text = ChatV2Localization.Resolve("ChatV2_LibraryOptions_Key", "Library options");
++            _shortcuts.Refresh();
++        }
++
++        private void RequestClose() => CloseRequested?.Invoke();
++
++        private void HandleMcpApproval(object sender, EventArgs args)
++        {
++            if (IsSettingsPanelOpen) ShowSettingsCategory(ChatV2SettingsCategory.Mcp);
++        }
++
++        private void HandleShortcutKeyDown(KeyDownEvent evt)
++        {
++            if (IsSettingsPanelOpen) _shortcuts.HandleKeyDown(evt);
++        }
++
++        private void HandleEscape(KeyDownEvent evt)
++        {
++            if (!IsSettingsPanelOpen || evt.keyCode != KeyCode.Escape) return;
++            evt.StopPropagation();
++            RequestClose();
++        }
++
++        public bool OpenSettingsPanel()
++        {
++            if (_disposed) return false;
++            _shortcuts.Bind(_root, _hotkeys);
++            bool opened = Presenter.Open();
++            _dropdowns.SyncShellClasses();
++            return opened;
++        }
++        public void CloseSettingsPanel()
++        {
++            _languageLifetime?.Cancel();
++            _shortcuts.Dispose();
++            Presenter.Close();
++            _dropdowns.SyncShellClasses();
++        }
++
++        public void ApplySettingsPanel(ChatV2SettingsPanelModel model)
++        {
++            if (_disposed) return;
++            Presenter.Apply(model);
++            if (model == null) return;
++            string theme = ChatV2ThemeCatalog.NormalizeThemeId(model.Theme);
++            _root.AddToClassList("chat-v2-theme-token-scope");
++            foreach (string id in ChatV2ThemeCatalog.ThemeIds)
++                _root.EnableInClassList("chat-v2-theme--" + id, string.Equals(id, theme, StringComparison.Ordinal));
++            bool light = ChatV2ThemeCatalog.TryGetDefinition(theme, out ChatV2ThemeDefinition definition) && definition.Palette.UsesLightBaseClass;
++            _root.EnableInClassList("chat-v2-scheme--light", light);
++            _root.EnableInClassList("chat-v2-scheme--dark", !light);
++            _root.style.fontSize = model.FontSize;
++            _dropdowns.SyncShellClasses();
++            _shortcuts.Refresh();
++        }
++
++        public void ApplySettingsMemory(ChatV2MemorySettingsModel model) { if (!_disposed) Presenter.ApplyMemorySettings(model); }
++        public void ApplySettingsBilling(ChatV2BillingSettingsModel model) { if (!_disposed) Presenter.ApplyBilling(model); }
++        public void ShowSettingsCategory(ChatV2SettingsCategory category) { if (!_disposed) Presenter.ShowCategory(category); }
++        public void RevealStoreChatHistorySetting() => Presenter.RevealStoreChatHistorySetting();
++        public void ApplyLanguageSelection(int index) => Presenter.ApplyLanguageSelection(index);
++
++        /// <summary>Shows settings feedback on the visible surface instead of the hidden chat shell.</summary>
++        public void ApplyStatus(ChatV2StatusEntry status)
++        {
++            if (_disposed) return;
++            bool visible = status != null && !status.IsEmpty &&
++                (status.Source == "settings" || status.Source == "external-conversation");
++            _status.text = visible ? status.Message : string.Empty;
++            _status.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
++        }
++
++        public async Task<bool> RunLanguageChangeAsync(Func<CancellationToken, Task> changeLanguage)
++        {
++            if (_disposed || _languageLifetime != null) return false;
++            var lifetime = new CancellationTokenSource();
++            _languageLifetime = lifetime;
++            try
++            {
++                await changeLanguage(lifetime.Token);
++                if (_disposed || lifetime.IsCancellationRequested) return false;
++                Presenter.ApplyLocalization();
++                _shortcuts.Refresh();
++                return true;
++            }
++            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return false; }
++            finally
++            {
++                if (ReferenceEquals(_languageLifetime, lifetime)) _languageLifetime = null;
++                lifetime.Dispose();
++            }
++        }
++
++        public void Dispose()
++        {
++            if (_disposed) return;
++            _disposed = true;
++            ChatV2Localization.StringsReady -= RefreshLocalization;
++            _localeSubscription?.Dispose();
++            _localeSubscription = null;
++            _languageLifetime?.Cancel();
++            Presenter.BackRequested -= RequestClose;
++            Presenter.McpApprovalSurfaceRequested -= HandleMcpApproval;
++            if (_closeButton != null) _closeButton.clicked -= RequestClose;
++            _libraryButton.RemoveFromHierarchy();
++            _shortcuts.Dispose();
++            _root.UnregisterCallback<KeyDownEvent>(HandleShortcutKeyDown, TrickleDown.TrickleDown);
++            _root.UnregisterCallback<KeyDownEvent>(HandleEscape);
++            _dropdowns.Dispose();
++            _external.Dispose();
++            Presenter.Dispose();
++        }
++    }
++}

@@ -34,6 +34,8 @@ Loading the extension alone does not update an installed Phase Pal binary.
   Badges use conversation ownership rather than model
   selection, and follow the current theme and active-history-row colors.
 - Sending text creates an independent local copy through the existing submit flow.
+- External conversation controls use the existing click sound in chat and shared
+  Library settings, following the app sound controls.
 - Locally handled controls, research and direct speech keep their current target
   without creating a copy. Conversation submits capture the writable target after
   copy preparation.
