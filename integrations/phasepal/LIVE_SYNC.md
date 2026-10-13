@@ -28,6 +28,9 @@ Loading the extension alone does not update an installed Phase Pal binary.
 - One protected original per provider/account/conversation, with separate home
   assignment. Changing the pairing target affects new chats.
 - Sharing changes visibility; it does not change sync choices or source identity.
+- History rows and the chat header show Phase Pal or the imported source, with
+  Synced/Local copy labels. Badges use conversation ownership rather than model
+  selection, and follow the current theme and active-history-row colors.
 - Sending text creates an independent local copy through the existing submit flow.
 - Banners name the source and offer View synced original; web sources also offer
   Open in ChatGPT/Claude. Voice and edits require Continue in Phase Pal first.
@@ -53,6 +56,11 @@ refreshed references for concurrent localization work. No Unity process was laun
 personal chats were accessed. Live website behavior, UI rendering, OS secret stores
 on each platform, and packaged-player QA remain separate checks.
 Upstream `just check-all` is unavailable on this host; no Rust code was changed.
+
+Source badges compiled in the already-open Unity Editor and passed eight detached
+UI-tree checks against actual UXML/USS assets, including cached-row updates and
+rebind cleanup. No Play Mode, build, or Test Runner was started. Player layout QA
+remains separate.
 
 ## License
 

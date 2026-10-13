@@ -1225,10 +1225,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..ae83a27ef
+index 000000000..2fafffa17
 --- /dev/null
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,109 @@
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
+@@ -0,0 +1,167 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1240,19 +1240,34 @@ index 000000000..ae83a27ef
 +    internal sealed class ChatV2ExternalConversationPresenter : IDisposable
 +    {
 +        private IChatV2ExternalConversations _service;
-+        private VisualElement _group, _banner;
++        private VisualElement _group, _banner, _header, _headerOrigin, _boundRoot;
++        private Action _refreshHistoryOrigins;
 +        private Toggle _toggle;
 +        private Label _status, _bannerText;
 +        private Button _copyCode, _continueHere, _viewOriginal, _openSource;
 +        private string _sessionId;
-+        public bool IsBound => _banner != null;
++        private string _sourceChannel;
++        private string _headerOriginalTooltip;
++        public bool IsBound => _boundRoot != null;
 +        private static string Text(string key, string fallback) => ChatV2Localization.Resolve(key, fallback);
 +        public void Bind(VisualElement root, IChatV2ExternalConversations service, Action<bool> toggle,
-+            Action continueHere, Action<string> viewOriginal)
++            Action continueHere, Action<string> viewOriginal, Action refreshHistoryOrigins = null)
 +        {
 +            Dispose();
-+            if (root == null || service == null) return;
++            if (root == null) return;
++            _boundRoot = root;
 +            _service = service;
++            _refreshHistoryOrigins = refreshHistoryOrigins;
++            _header = root.Q<VisualElement>("chat-v2-header");
++            if (_header != null)
++            {
++                _headerOriginalTooltip = _header.tooltip;
++                _headerOrigin = ChatV2ConversationOriginBadge.Create("chat-v2-header-origin");
++                _headerOrigin.AddToClassList("chat-v2-origin--header");
++                _header.Add(_headerOrigin);
++                _header.AddToClassList("chat-v2-header--with-origin");
++            }
++            if (service == null) { Refresh(); return; }
 +            _group = new VisualElement { name = "chat-v2-settings-external-conversations" };
 +            _group.AddToClassList("chat-v2-external-settings");
 +            var syncRow = new VisualElement { name = "chat-v2-settings-row-external-conversations" };
@@ -1312,13 +1327,20 @@ index 000000000..ae83a27ef
 +            root.Q<VisualElement>("chat-v2-composer-wrap")?.Insert(0, _banner);
 +            _service.Changed += Refresh; Refresh();
 +        }
-+        public void ApplySession(string sessionId) { _sessionId = sessionId; Refresh(); }
++        public void ApplySession(string sessionId, string sourceChannel = null)
++        { _sessionId = sessionId; _sourceChannel = sourceChannel; Refresh(); }
 +        private void Refresh()
 +        {
++            ChatV2ExternalConversationInfo info = _service?.GetSessionInfo(_sessionId);
++            if (_headerOrigin != null)
++            {
++                ChatV2ConversationOriginBadge.Apply(_headerOrigin, info, _sourceChannel);
++                _header.tooltip = _headerOrigin.tooltip;
++            }
++            _refreshHistoryOrigins?.Invoke();
 +            if (_service == null) return;
 +            _toggle?.SetValueWithoutNotify(_service.Enabled); _copyCode?.SetEnabled(_service.Ready);
 +            if (_status != null) _status.text = _service.StatusText;
-+            ChatV2ExternalConversationInfo info = _service.GetSessionInfo(_sessionId);
 +            if (_banner == null) return;
 +            _banner.style.display = info == null ? DisplayStyle.None : DisplayStyle.Flex;
 +            if (info == null) return;
@@ -1334,7 +1356,43 @@ index 000000000..ae83a27ef
 +        {
 +            if (_service != null) _service.Changed -= Refresh;
 +            _group?.RemoveFromHierarchy(); _banner?.RemoveFromHierarchy();
-+            _group = _banner = null; _service = null;
++            _headerOrigin?.RemoveFromHierarchy();
++            _header?.RemoveFromClassList("chat-v2-header--with-origin");
++            if (_header != null) _header.tooltip = _headerOriginalTooltip;
++            _group = _banner = _header = _headerOrigin = _boundRoot = null; _service = null;
++            _refreshHistoryOrigins = null;
++        }
++    }
++
++    internal static class ChatV2ConversationOriginBadge
++    {
++        /// <summary>Creates non-interactive source and ownership labels shared by both chat surfaces.</summary>
++        public static VisualElement Create(string name)
++        {
++            var row = new VisualElement { name = name, pickingMode = PickingMode.Ignore };
++            row.AddToClassList("chat-v2-origin");
++            var source = new Label { name = "source", pickingMode = PickingMode.Ignore };
++            source.AddToClassList("chat-v2-origin__badge"); source.AddToClassList("chat-v2-origin__source");
++            var state = new Label { name = "state", pickingMode = PickingMode.Ignore };
++            state.AddToClassList("chat-v2-origin__badge"); state.AddToClassList("chat-v2-origin__state");
++            row.Add(source); row.Add(state);
++            return row;
++        }
++
++        /// <summary>Shows conversation origin independently from the selected reply provider.</summary>
++        public static void Apply(VisualElement row, ChatV2ExternalConversationInfo info, string sourceChannel)
++        {
++            string channel = sourceChannel?.Trim().ToLowerInvariant();
++            string source = info?.SourceName ?? (channel == "discord" ? "Discord" : channel == "telegram" ? "Telegram" : "Phase Pal");
++            string state = info == null ? string.Empty : info.IsLocalCopy
++                ? ChatV2Localization.Resolve("ChatV2_Origin_LocalCopy_Key", "Local copy")
++                : ChatV2Localization.Resolve("ChatV2_Origin_Synced_Key", "Synced");
++            row.Q<Label>("source").text = source;
++            Label stateLabel = row.Q<Label>("state"); stateLabel.text = state;
++            stateLabel.style.display = info == null ? DisplayStyle.None : DisplayStyle.Flex;
++            row.tooltip = info == null ? "Conversation origin: " + source
++                : info.IsLocalCopy ? "Continued in Phase Pal from " + source + ". Changes do not sync back."
++                : "Synced original from " + source + ". Continue in Phase Pal to create a local copy.";
 +        }
 +    }
 +}
@@ -1373,10 +1431,9 @@ index 8bf176b59..96c5b1ea1 100644
      position: absolute;
      left: 0;
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
-index cdc53ab40..3ec8fe819 100644
---- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs	
-@@ -128,6 +128,11 @@ namespace PhasePal.Services.ChatV2.Toolkit
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShellController.cs
+@@ -128,6 +128,11 @@
          private readonly ChatV2CommandSuggestionPresenter _commandSuggestionPresenter = new ChatV2CommandSuggestionPresenter();
          private readonly ChatV2ConnectorComposerPresenter _connectorComposerPresenter = new ChatV2ConnectorComposerPresenter();
          private readonly ChatV2SettingsPanelPresenter _settingsPanelPresenter = new ChatV2SettingsPanelPresenter();
@@ -1388,7 +1445,7 @@ index cdc53ab40..3ec8fe819 100644
          private readonly ChatV2KeyboardShortcutSettingsPresenter _keyboardShortcutSettingsPresenter =
              new ChatV2KeyboardShortcutSettingsPresenter();
          private readonly ChatV2ChangeAvatarPanelPresenter _changeAvatarPanelPresenter = new ChatV2ChangeAvatarPanelPresenter();
-@@ -944,6 +949,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -944,6 +949,7 @@
              _connectorComposerPresenter.Dispose();
              _nativePermissionPresenter?.Dispose();
              _nativePermissionPresenter = null;
@@ -1396,7 +1453,7 @@ index cdc53ab40..3ec8fe819 100644
              _settingsPanelPresenter.Dispose();
              _changeAvatarPanelPresenter.Dispose();
              _achievementsPanelPresenter.Dispose();
-@@ -1167,6 +1173,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -1167,6 +1173,7 @@
              if (_documentRoot == null)
              {
                  _transparentWindowInputRegionPublisher.Bind(null, null);
@@ -1404,7 +1461,15 @@ index cdc53ab40..3ec8fe819 100644
                  _root = null;
                  _elementRefs = null;
                  ApplyElementRefs(null);
-@@ -1381,6 +1388,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -1264,6 +1271,7 @@
+             using (BindHistoryPresenterMarker.Auto())
+             {
+                 _historyPresenter.Bind(_elementRefs, _windowLayoutController.GetRootBounds);
++                _historyPresenter.SetSourceResolver(id => _externalConversations?.GetSessionInfo(id));
+             }
+
+             using (BindChromePresenterMarker.Auto())
+@@ -1381,6 +1389,7 @@
              _connectorComposerPresenter.Dispose();
              _nativePermissionPresenter?.Dispose();
              _nativePermissionPresenter = null;
@@ -1412,7 +1477,7 @@ index cdc53ab40..3ec8fe819 100644
              _settingsPanelPresenter.Dispose();
              _changeAvatarPanelPresenter.Dispose();
              _achievementsPanelPresenter.Dispose();
-@@ -2209,6 +2217,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -2209,6 +2218,7 @@
  
          private void EnsureSettingsPanelBound()
          {
@@ -1420,15 +1485,15 @@ index cdc53ab40..3ec8fe819 100644
              using var ensureSettingsPanelBoundScope = EnsureSettingsPanelBoundMarker.Auto();
  
              if (_root == null || _settingsPanelPresenter.IsBound)
-@@ -2811,9 +2820,28 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -2811,7 +2821,27 @@
  
          public void ApplySession(ChatV2SessionSummary session)
          {
 +            EnsureExternalConversationsBound();
-+            _externalConversationPresenter.ApplySession(session?.SessionId);
++            _externalConversationPresenter.ApplySession(session?.SessionId, session?.SourceChannel);
              _chromePresenter.ApplySession(session);
-         }
- 
++        }
++
 +        /// <summary>Binds external conversation settings and copy/source banner actions.</summary>
 +        public void ConfigureExternalConversations(IChatV2ExternalConversations service, Action<bool> toggle,
 +            Action continueHere, Action<string> viewOriginal)
@@ -1436,19 +1501,18 @@ index cdc53ab40..3ec8fe819 100644
 +            _externalConversationPresenter.Dispose();
 +            _externalConversations = service; _toggleExternalConversations = toggle;
 +            _continueExternalConversation = continueHere; _viewExternalOriginal = viewOriginal;
++            _historyPresenter.SetSourceResolver(id => _externalConversations?.GetSessionInfo(id));
 +            EnsureExternalConversationsBound();
 +        }
 +
 +        private void EnsureExternalConversationsBound()
 +        {
-+            if (!_externalConversationPresenter.IsBound && _root != null && _externalConversations != null)
++            if (!_externalConversationPresenter.IsBound && _root != null)
 +                _externalConversationPresenter.Bind(_root, _externalConversations, _toggleExternalConversations,
-+                    _continueExternalConversation, _viewExternalOriginal);
-+        }
-+
++                    _continueExternalConversation, _viewExternalOriginal, _historyPresenter.RefreshSourceBadges);
+         }
+
          public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
-         {
-             if (model == null)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
 index 000000000..4c2c8f2ef
@@ -2028,10 +2092,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..b15c887b2
+index 000000000..a4e1cc43b
 --- /dev/null
-+++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,118 @@
++++ b/Phase Pal/Docs/OpenChatLinkIntegration.md
+@@ -0,0 +1,132 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink imports personal ChatGPT and Claude web chats through Chrome, and
@@ -2070,6 +2134,14 @@ index 000000000..b15c887b2
 +chat when changing character. It does not change source identity, assignment,
 +selection, or schedule. With sharing off, chats appear in their home groups.
 +Character personality applies to new replies through its separate setting.
++
++History rows and the chat header show a source badge. Native chats show Phase Pal;
++imports show ChatGPT, Claude, Codex, or Claude Code with Synced or Local copy.
++The badge uses saved conversation ownership, independently of the reply model.
++Existing Discord and Telegram channel labels remain distinct. Small themed chips
++sit below history titles and the header title; cached rows update without a list
++rebuild. The header labels are hidden in Settings, and all badge content leaves
++chat selection and window dragging available.
 +
 +Original transcripts are protected in both modes. Sending text first creates a
 +local copy through the existing ChatV2 submit coordinator. Voice and edit actions
@@ -2150,6 +2222,12 @@ index 000000000..b15c887b2
 +launched and no personal conversations were accessed. These managed checks do
 +not prove live web endpoints, Editor rendering, or packaged-player behavior.
 +The offline Python fallback remains a separate ChatGPT-only flow.
++
++The source-badge update compiled in the existing Unity Editor and passed eight
++detached UI-tree checks with the real UXML/USS assets. The checks cover all four
++sources, native chats, local-copy labels, cached-row updates, and rebinding cleanup.
++No new Editor, Play Mode, build, or Test Runner was started. Player layout QA
++remains separate.
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs
 index e73fa7b00..f48b1b2c5 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs	
@@ -2513,3 +2591,278 @@ index 000000000..a3de89b44
 +        }
 +    }
 +}
+
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
+index 47f5ca399..1375640ca 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
+@@ -56,6 +56,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             new Dictionary<string, (ChatV2SessionSummary Session, Button Row)>(StringComparer.Ordinal);
+         private bool _isPointerOverHistoryList;
+         private Func<Rect> _rootBoundsResolver;
++        private Func<string, ChatV2ExternalConversationInfo> _sourceResolver;
+         private IVisualElementScheduledItem _hideScrollbarSchedule;
+         private IReadOnlyList<ChatV2SessionSummary> _pendingSessions;
+         private string _pendingCurrentSessionId = string.Empty;
+@@ -209,6 +210,30 @@ namespace PhasePal.Services.ChatV2.Toolkit
+                    previous.HasUnreadExternalActivity == next.HasUnreadExternalActivity;
+         }
+
++        /// <summary>Uses cached source ownership to label history without file access.</summary>
++        public void SetSourceResolver(Func<string, ChatV2ExternalConversationInfo> resolver)
++        {
++            _sourceResolver = resolver;
++            RefreshSourceBadges();
++        }
++
++        /// <summary>Updates source labels without replacing rows or resetting scroll state.</summary>
++        public void RefreshSourceBadges()
++        {
++            foreach (var entry in _sessionRows)
++                ApplySourceBadge(entry.Value.Row, entry.Value.Session);
++        }
++
++        private void ApplySourceBadge(Button row, ChatV2SessionSummary session)
++        {
++            VisualElement badge = row.Q<VisualElement>("chat-v2-history-origin-" + session.SessionId);
++            if (badge != null)
++            {
++                ChatV2ConversationOriginBadge.Apply(badge, _sourceResolver?.Invoke(session.SessionId), session.SourceChannel);
++                row.tooltip = (string)badge.userData + "\n" + badge.tooltip;
++            }
++        }
++
+         private void OnHistoryContentGeometryChanged(GeometryChangedEvent evt)
+         {
+             TryRequestMoreSessions();
+@@ -307,6 +332,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             _historyDropIndicator?.RemoveFromHierarchy();
+             _historyDropIndicator = null;
+             _rootBoundsResolver = null;
++            _sourceResolver = null;
+             _hideScrollbarSchedule?.Pause();
+             _hideScrollbarSchedule = null;
+             ClearPendingSessionRefresh();
+@@ -492,6 +518,12 @@ namespace PhasePal.Services.ChatV2.Toolkit
+             };
+             titleLabel.AddToClassList("chat-v2-history-item__title");
+             row.Add(titleLabel);
++            VisualElement origin = ChatV2ConversationOriginBadge.Create("chat-v2-history-origin-" + sessionId);
++            origin.userData = row.tooltip;
++            origin.AddToClassList("chat-v2-origin--history");
++            row.Add(origin);
++            row.AddToClassList("chat-v2-history-item--with-origin");
++            ApplySourceBadge(row, session);
+             AddSourceChannelIcon(row, session);
+             AddUnreadExternalActivityIndicator(row, session);
+             if (showReplyingMarker)
+
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss
+index 821bec080..147673998 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss
+@@ -2208,3 +2208,104 @@
+     border-radius: 8px;
+     background-color: var(--chat-v2-panel-surface);
+ }
++
++.chat-v2-origin {
++    flex-direction: row;
++    align-items: center;
++    min-width: 0;
++    flex-shrink: 0;
++}
++
++.chat-v2-origin__badge {
++    margin: 0;
++    padding-left: 5px;
++    padding-right: 5px;
++    padding-top: 1px;
++    padding-bottom: 1px;
++    min-width: 0;
++    max-height: 18px;
++    font-size: 10px;
++    color: rgba(213, 220, 230, 0.86);
++    background-color: rgba(255, 255, 255, 0.06);
++    border-width: 1px;
++    border-color: rgba(255, 255, 255, 0.12);
++    border-radius: 5px;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
++    -unity-text-align: middle-center;
++}
++
++.chat-v2-origin__source {
++    flex-shrink: 1;
++}
++
++.chat-v2-origin__state {
++    margin-left: 4px;
++    flex-shrink: 0;
++}
++
++.chat-v2-origin--history {
++    margin-top: 3px;
++    align-self: flex-start;
++    max-width: 100%;
++}
++
++.chat-v2-history-item--with-origin {
++    min-height: 46px;
++    padding-top: 4px;
++    padding-bottom: 4px;
++}
++
++.chat-v2-header--with-origin .chat-v2-title {
++    top: 0;
++    height: 18px;
++    min-height: 18px;
++    max-height: 18px;
++    margin-top: 0;
++    font-size: 14px;
++}
++
++.chat-v2-origin--header {
++    position: absolute;
++    left: 88px;
++    right: 88px;
++    top: 20px;
++    height: 18px;
++    justify-content: center;
++}
++
++.chat-v2--mini .chat-v2-origin--header {
++    left: 48px;
++    right: 64px;
++}
++
++.chat-v2--settings-open .chat-v2-origin--header {
++    display: none;
++}
++
++.chat-v2--settings-open .chat-v2-header--with-origin .chat-v2-title {
++    top: 50%;
++    height: 40px;
++    min-height: 40px;
++    max-height: 40px;
++    margin-top: -20px;
++    font-size: 16px;
++}
++
++.chat-v2.chat-v2-theme-token-scope .chat-v2-origin__badge {
++    color: var(--chat-v2-text-secondary);
++    background-color: var(--chat-v2-input-surface);
++    border-color: var(--chat-v2-border);
++}
++
++.chat-v2.chat-v2-theme-token-scope .chat-v2-origin__state {
++    color: var(--chat-v2-text-primary);
++    background-color: var(--chat-v2-accent-soft);
++}
++
++.chat-v2.chat-v2-theme-token-scope .chat-v2-history-item--active .chat-v2-origin__badge {
++    color: var(--chat-v2-on-accent);
++    background-color: rgba(255, 255, 255, 0.12);
++    border-color: rgba(255, 255, 255, 0.24);
++}
+
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
+index 551dcc53e..30af5b7d6 100644
+--- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
+@@ -441,6 +441,94 @@ namespace PhasePal.Tests.ChatV2.EditMode
+                 historyList.Query<Label>(className: "chat-v2-history-item__title").ToList().Select(label => label.text));
+         }
+
++        [TestCase(null, false, "Phase Pal", "")]
++        [TestCase("ChatGPT", false, "ChatGPT", "Synced")]
++        [TestCase("Claude", false, "Claude", "Synced")]
++        [TestCase("Codex", false, "Codex", "Synced")]
++        [TestCase("Claude Code", false, "Claude Code", "Synced")]
++        [TestCase("ChatGPT", true, "ChatGPT", "Local copy")]
++        [TestCase("Codex", true, "Codex", "Local copy")]
++        public void ConversationOriginBadges_MatchInHistoryAndHeader(string sourceName, bool copy, string expectedSource, string expectedState)
++        {
++            var root = LoadToolkitShellUxmlRoot();
++            var service = new OriginBadgeService { Info = sourceName == null ? null : new ChatV2ExternalConversationInfo {
++                SessionId = "session", SourceName = sourceName, OriginalSessionId = copy ? "original" : null
++            } };
++            using var history = new ChatV2HistoryPresenter();
++            history.Bind(ChatV2ToolkitElementRefs.Query(root), () => new Rect(0, 0, 700, 600));
++            history.SetSourceResolver(service.GetSessionInfo);
++            history.ApplySessions(new[] { new ChatV2SessionSummary("session", "A chat", 2) }, "session", false);
++            Type type = typeof(ChatV2HistoryPresenter).Assembly.GetType("PhasePal.Services.ChatV2.Toolkit.ChatV2ExternalConversationPresenter");
++            var external = (IDisposable)Activator.CreateInstance(type, true);
++            try
++            {
++                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("ApplySession").Invoke(external, new object[] { "session", null });
++                foreach (string name in new[] { "chat-v2-history-origin-session", "chat-v2-header-origin" })
++                {
++                    VisualElement badge = root.Q<VisualElement>(name);
++                    Assert.That(badge.Q<Label>("source").text, Is.EqualTo(expectedSource));
++                    Assert.That(badge.Q<Label>("state").text, Is.EqualTo(expectedState));
++                    Assert.That(badge.Q<Label>("state").style.display.value,
++                        Is.EqualTo(sourceName == null ? DisplayStyle.None : DisplayStyle.Flex));
++                    Assert.That(badge.pickingMode, Is.EqualTo(PickingMode.Ignore));
++                }
++                Assert.That(root.Q<Button>("chat-v2-history-session-session").ClassListContains("chat-v2-history-item--active"), Is.True);
++            }
++            finally { external.Dispose(); }
++            Assert.That(root.Q<VisualElement>("chat-v2-header-origin"), Is.Null);
++            Assert.That(service.Subscribers, Is.Zero);
++        }
++
++        [Test]
++        public void ConversationOriginBadges_RefreshCachedRowsAndResetOnRebind()
++        {
++            var root = LoadToolkitShellUxmlRoot();
++            var service = new OriginBadgeService();
++            using var history = new ChatV2HistoryPresenter();
++            history.Bind(ChatV2ToolkitElementRefs.Query(root), () => new Rect(0, 0, 700, 600));
++            history.SetSourceResolver(service.GetSessionInfo);
++            history.ApplySessions(new[] { new ChatV2SessionSummary("session", "A chat", 2) }, "session", false);
++            Button row = root.Q<Button>("chat-v2-history-session-session");
++            Type type = typeof(ChatV2HistoryPresenter).Assembly.GetType("PhasePal.Services.ChatV2.Toolkit.ChatV2ExternalConversationPresenter");
++            var external = (IDisposable)Activator.CreateInstance(type, true);
++            try
++            {
++                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("ApplySession").Invoke(external, new object[] { "session", null });
++                service.Info = new ChatV2ExternalConversationInfo { SessionId = "session", SourceName = "Claude", OriginalSessionId = "original" };
++                service.Notify();
++                Assert.That(root.Q<Button>(row.name), Is.SameAs(row));
++                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").Q<Label>("state").text, Is.EqualTo("Local copy"));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").text, Is.EqualTo("Claude"));
++                type.GetMethod("Bind").Invoke(external, new object[] { root, null, null, null, null, (Action)history.RefreshSourceBadges });
++                type.GetMethod("ApplySession").Invoke(external, new object[] { "native", null });
++                history.SetSourceResolver(null);
++                Assert.That(service.Subscribers, Is.Zero);
++                Assert.That(root.Query<VisualElement>(name: "chat-v2-header-origin").ToList().Count, Is.EqualTo(1));
++                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
++                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
++            }
++            finally { external.Dispose(); }
++        }
++
++        private sealed class OriginBadgeService : IChatV2ExternalConversations
++        {
++            public ChatV2ExternalConversationInfo Info;
++            public event Action Changed;
++            public int Subscribers => Changed?.GetInvocationList().Length ?? 0;
++            public bool Enabled => false;
++            public bool Ready => false;
++            public string StatusText => "Off";
++            public string GetConnectionCode() => string.Empty;
++            public ChatV2ExternalConversationInfo GetSessionInfo(string sessionId) => sessionId == "session" ? Info : null;
++            public bool CanWriteSession(string sessionId) => Info == null || Info.IsLocalCopy;
++            public Task SetEnabledAsync(bool enabled, string characterId, string characterName) => Task.CompletedTask;
++            public Task<string> CreateLocalCopyAsync(string sessionId, string characterId, System.Threading.CancellationToken cancellationToken) => Task.FromResult("copy");
++            public void Notify() => Changed?.Invoke();
++            public void Dispose() { }
++        }
++
+         [Test]
+         public void ComposerTextHistory_UndoRedoRestoresDraftSnapshots()
+         {
