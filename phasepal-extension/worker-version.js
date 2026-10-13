@@ -1,1 +1,1 @@
-export const WORKER_REVISION = '0.6.0';
+export const WORKER_REVISION = '0.6.1';

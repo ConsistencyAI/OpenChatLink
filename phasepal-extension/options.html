@@ -44,7 +44,7 @@
           <label for="chats">Conversations to sync</label>
           <div class="select-wrap"><select id="chats"><option value="selected">Only selected chats</option><option value="all">All personal ChatGPT chats</option></select><svg class="select-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div>
           <section id="picker" class="picker">
-            <div class="picker-toolbar"><p class="field-hint">Load titles to choose your chats. Select a chat, then preview and choose its messages.</p><button id="load" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0 1 13-2l2 2M19 17a8 8 0 0 1-13 2l-2-2"/></svg>Load / refresh chats</button></div>
+            <div class="picker-toolbar"><p class="field-hint">Load titles to choose your chats. Select chats and save. Preview only if you want to choose specific messages.</p><button id="load" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0 1 13-2l2 2M19 17a8 8 0 0 1-13 2l-2-2"/></svg>Load / refresh chats</button></div>
             <label for="search">Search loaded chats</label>
             <div class="search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="search" type="search" placeholder="Find a conversation…"></div>
             <p id="selection-count" class="selection-count"></p>
@@ -63,7 +63,7 @@
             <div id="history-defaults"><label for="history">Messages to import</label>
             <div class="select-wrap"><select id="history"><option value="all">All history</option><option value="last100">Last 100 messages per chat</option><option value="since">Messages from a chosen date</option></select><svg class="select-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div>
             <div id="date-row" hidden><label for="since-date">Include messages on or after</label><input id="since-date" type="date" min="1970-01-01" aria-describedby="date-hint"><p id="date-hint" class="field-hint">From 00:00 UTC on this date.</p></div>
-            </div><p id="history-help" class="field-hint">For each selected chat, open Preview / choose history to select messages and future updates.</p>
+            </div><p id="history-help" class="field-hint">Choose how much history to sync. Preview is optional for custom message selections.</p>
           </section>
 
           <section class="card" aria-labelledby="schedule-title">

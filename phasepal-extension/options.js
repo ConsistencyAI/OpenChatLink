@@ -51,17 +51,17 @@ const preview = createHistoryPreview({request,
 });
 function visibility() {
   el('picker').hidden = el('chats').value !== 'selected';
-  el('history-defaults').hidden = el('chats').value === 'selected';
+  el('history-defaults').hidden = false;
   el('history-help').textContent = el('chats').value === 'selected'
-    ? 'For each selected chat, open Preview / choose history to select messages and future updates.'
+    ? 'Applies to selected chats, including future messages. Preview is optional. Chats with custom message selections keep their own choices.'
     : 'This filter applies to all chats from this source, including future messages. Choose specific chats to preview their messages first.';
   el('date-row').hidden = el('history').value !== 'since';
-  el('since-date').required = el('chats').value === 'all' && el('history').value === 'since';
+  el('since-date').required = el('history').value === 'since';
   el('selection-count').textContent = `${selected.size} ${selected.size === 1 ? 'chat' : 'chats'} selected. Choices on other pages are kept.`;
   const reviewed = [...selected.values()].filter(row => row.transfer);
   const remaining = selected.size - reviewed.length;
   el('transfer-summary').textContent = el('chats').value === 'all' ? 'All chats use the default history filter. Choose specific chats to preview exact messages before import.'
-    : `${reviewed.length} chats · ${reviewed.reduce((sum, row) => sum + row.transfer.messageKeys.length, 0)} selected messages${reviewed.some(row => row.transfer.includeFuture) ? ' · Future messages enabled for some chats' : ''}.${remaining ? ` Preview ${remaining} more chats before saving.` : ''}`;
+    : `${selected.size} chats selected.${remaining ? ` ${remaining} use the history setting above.` : ''}${reviewed.length ? ` ${reviewed.length} use custom selections (${reviewed.reduce((sum, row) => sum + row.transfer.messageKeys.length, 0)} messages${reviewed.some(row => row.transfer.includeFuture) ? ', plus future messages where enabled' : ''}).` : ''} Preview is optional.`;
 }
 function loadPreferences(value) {
   const preferences = normalizePreferences(value);
@@ -171,10 +171,8 @@ el('preferences').addEventListener('submit', event => {
   event.preventDefault();
   if (busy || previewOpen) return;
   void act(async () => {
-    if (el('chats').value === 'selected' && [...selected.values()].some(row => !row.transfer))
-      throw new Error('Preview each selected chat and choose its messages before saving.');
     const preferences = normalizePreferences({chats: el('chats').value, selected: [...selected.values()],
-      history: el('chats').value === 'all' ? el('history').value : 'all', sinceDate: el('since-date').value, schedule: el('schedule').value});
+      history: el('history').value, sinceDate: el('since-date').value, schedule: el('schedule').value});
     await request({type: 'preferences', preferences}); dirty = false;
   });
 });
