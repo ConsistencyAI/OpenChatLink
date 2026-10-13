@@ -2527,10 +2527,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..db1b035a4
+index 000000000..3d39de4ec
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,164 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink imports personal ChatGPT and Claude web chats through Chrome, and
@@ -2592,15 +2592,17 @@ index 000000000..db1b035a4
 +selection, or schedule. With sharing off, chats appear in their home groups.
 +Character personality applies to new replies through its separate setting.
 +
-+History rows show one compact source label beside the title for imported chats.
++History rows show one 16-pixel source icon beside the title for imported chats.
 +Native Phase Pal chats have no sidebar badge. Synced or Local copy details remain
 +in the row tooltip and the chat header; the header also labels native chats.
 +The badge uses saved conversation ownership, independently of the reply model.
 +Existing Discord and Telegram sidebar icons remain distinct without duplicate
-+source labels. Source chips do not add a history row or increase its height;
++source labels. Source icons do not add a history row or increase its height;
 +cached rows update without a list rebuild. The header labels are hidden in
-+Settings, and all badge content leaves
-+chat selection and window dragging available.
++Settings, and all badge content leaves chat selection and window dragging
++available. Hovering the source icon or history row shows the source name and
++Synced or Local copy status. Sidebar icons use the same Lobe Icons marks as the
++extension, tinted with the current chat theme's text colors.
 +
 +Original transcripts are protected in both modes. Sending text first creates a
 +local copy through the existing ChatV2 submit coordinator. Voice and edit actions
@@ -3111,10 +3113,23 @@ index 000000000..49a616e43
 +    }
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
-index 47f5ca399..ac0bdb5ed 100644
+index 47f5ca399..166eaf985 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs	
-@@ -56,6 +56,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -28,6 +28,12 @@ namespace PhasePal.Services.ChatV2.Toolkit
+         private const string HISTORY_LIST_SCROLLING_CLASS = "chat-v2-history__list--scrolling";
+         private const string DISCORD_CHANNEL = "discord";
+         private const string TELEGRAM_CHANNEL = "telegram";
++        private static readonly Dictionary<string, string> _sourceIconClasses = new Dictionary<string, string> {
++            ["chatgpt"] = "chat-v2-history-origin-icon--chatgpt",
++            ["claude"] = "chat-v2-history-origin-icon--claude",
++            ["codex"] = "chat-v2-history-origin-icon--codex",
++            ["claude-code"] = "chat-v2-history-origin-icon--claude-code"
++        };
+ 
+         private VisualElement _root;
+         private VisualElement _historyPanel;
+@@ -56,6 +62,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              new Dictionary<string, (ChatV2SessionSummary Session, Button Row)>(StringComparer.Ordinal);
          private bool _isPointerOverHistoryList;
          private Func<Rect> _rootBoundsResolver;
@@ -3122,7 +3137,7 @@ index 47f5ca399..ac0bdb5ed 100644
          private IVisualElementScheduledItem _hideScrollbarSchedule;
          private IReadOnlyList<ChatV2SessionSummary> _pendingSessions;
          private string _pendingCurrentSessionId = string.Empty;
-@@ -209,6 +210,35 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -209,6 +216,40 @@ namespace PhasePal.Services.ChatV2.Toolkit
                     previous.HasUnreadExternalActivity == next.HasUnreadExternalActivity;
          }
  
@@ -3148,17 +3163,22 @@ index 47f5ca399..ac0bdb5ed 100644
 +                ChatV2ExternalConversationInfo info = _sourceResolver?.Invoke(session.SessionId);
 +                ChatV2ConversationOriginBadge.Apply(badge, info, session.SourceChannel);
 +                badge.style.display = info == null ? DisplayStyle.None : DisplayStyle.Flex;
++                badge.Q<Label>("source").style.display = DisplayStyle.None;
 +                Label state = badge.Q<Label>("state");
 +                state.style.display = DisplayStyle.None;
-+                row.tooltip = info == null ? (string)badge.userData
-+                    : (string)badge.userData + "\n" + info.SourceName + " · " + state.text + "\n" + badge.tooltip;
++                VisualElement icon = badge.Q<VisualElement>("source-icon");
++                string source = info?.Source ?? info?.SourceName?.ToLowerInvariant().Replace(' ', '-');
++                foreach (var supported in _sourceIconClasses)
++                    icon.EnableInClassList(supported.Value, source == supported.Key);
++                if (info != null) badge.tooltip = info.SourceName + " · " + state.text + "\n" + badge.tooltip;
++                row.tooltip = info == null ? (string)badge.userData : (string)badge.userData + "\n" + badge.tooltip;
 +            }
 +        }
 +
          private void OnHistoryContentGeometryChanged(GeometryChangedEvent evt)
          {
              TryRequestMoreSessions();
-@@ -307,6 +337,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -307,6 +348,7 @@ namespace PhasePal.Services.ChatV2.Toolkit
              _historyDropIndicator?.RemoveFromHierarchy();
              _historyDropIndicator = null;
              _rootBoundsResolver = null;
@@ -3166,7 +3186,7 @@ index 47f5ca399..ac0bdb5ed 100644
              _hideScrollbarSchedule?.Pause();
              _hideScrollbarSchedule = null;
              ClearPendingSessionRefresh();
-@@ -491,7 +522,15 @@ namespace PhasePal.Services.ChatV2.Toolkit
+@@ -491,7 +533,19 @@ namespace PhasePal.Services.ChatV2.Toolkit
                  name = "chat-v2-history-session-title-" + sessionId
              };
              titleLabel.AddToClassList("chat-v2-history-item__title");
@@ -3177,6 +3197,10 @@ index 47f5ca399..ac0bdb5ed 100644
 +            VisualElement origin = ChatV2ConversationOriginBadge.Create("chat-v2-history-origin-" + sessionId);
 +            origin.userData = row.tooltip;
 +            origin.AddToClassList("chat-v2-origin--history");
++            origin.pickingMode = PickingMode.Position;
++            var sourceIcon = new VisualElement { name = "source-icon", pickingMode = PickingMode.Ignore };
++            sourceIcon.AddToClassList("chat-v2-history-origin-icon");
++            origin.Add(sourceIcon);
 +            titleLine.Add(origin);
 +            row.Add(titleLine);
 +            ApplySourceBadge(row, session);
@@ -3184,10 +3208,10 @@ index 47f5ca399..ac0bdb5ed 100644
              AddUnreadExternalActivityIndicator(row, session);
              if (showReplyingMarker)
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss
-index 821bec080..5111fc2ac 100644
+index 821bec080..dfad87f8f 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ToolkitShell.ConversationStates.uss	
-@@ -2208,3 +2208,135 @@
+@@ -2208,3 +2208,159 @@
      border-radius: 8px;
      background-color: var(--chat-v2-panel-surface);
  }
@@ -3230,16 +3254,40 @@ index 821bec080..5111fc2ac 100644
 +
 +.chat-v2-origin--history {
 +    margin-left: 6px;
-+    max-width: 90px;
++    width: 16px;
++    height: 16px;
++    max-width: 16px;
 +}
 +
-+.chat-v2-origin--history .chat-v2-origin__badge {
-+    max-height: 16px;
-+    font-size: 9px;
-+    padding-top: 0;
-+    padding-bottom: 0;
-+    padding-left: 4px;
-+    padding-right: 4px;
++.chat-v2-history-origin-icon {
++    width: 16px;
++    height: 16px;
++    -unity-background-scale-mode: scale-to-fit;
++    -unity-background-image-tint-color: rgba(213, 220, 230, 0.86);
++}
++
++.chat-v2-history-origin-icon--chatgpt {
++    background-image: url("SourceIcons/chatgpt.png");
++}
++
++.chat-v2-history-origin-icon--claude {
++    background-image: url("SourceIcons/claude.png");
++}
++
++.chat-v2-history-origin-icon--codex {
++    background-image: url("SourceIcons/codex.png");
++}
++
++.chat-v2-history-origin-icon--claude-code {
++    background-image: url("SourceIcons/claude-code.png");
++}
++
++.chat-v2.chat-v2-theme-token-scope .chat-v2-history-origin-icon {
++    -unity-background-image-tint-color: var(--chat-v2-text-secondary);
++}
++
++.chat-v2.chat-v2-theme-token-scope .chat-v2-history-item--active .chat-v2-history-origin-icon {
++    -unity-background-image-tint-color: var(--chat-v2-text-primary);
 +}
 +
 +.chat-v2-history-item__title-line {
@@ -3324,10 +3372,10 @@ index 821bec080..5111fc2ac 100644
 +    display: none;
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
-index 551dcc53e..70278ba33 100644
+index 551dcc53e..b40348533 100644
 --- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
-@@ -441,6 +441,122 @@ namespace PhasePal.Tests.ChatV2.EditMode
+@@ -441,6 +441,134 @@ namespace PhasePal.Tests.ChatV2.EditMode
                  historyList.Query<Label>(className: "chat-v2-history-item__title").ToList().Select(label => label.text));
          }
  
@@ -3364,7 +3412,15 @@ index 551dcc53e..70278ba33 100644
 +                        Is.EqualTo(historyBadge || sourceName == null ? DisplayStyle.None : DisplayStyle.Flex));
 +                    if (historyBadge) Assert.That(badge.style.display.value,
 +                        Is.EqualTo(sourceName == null ? DisplayStyle.None : DisplayStyle.Flex));
-+                    Assert.That(badge.pickingMode, Is.EqualTo(PickingMode.Ignore));
++                    if (historyBadge) {
++                        Assert.That(badge.Q<Label>("source").style.display.value, Is.EqualTo(DisplayStyle.None));
++                        if (sourceName != null) {
++                            Assert.That(badge.tooltip, Does.Contain(expectedSource).And.Contain(expectedState));
++                            Assert.That(badge.Q<VisualElement>("source-icon").ClassListContains(
++                                "chat-v2-history-origin-icon--" + sourceName.ToLowerInvariant().Replace(' ', '-')), Is.True);
++                        }
++                    }
++                    Assert.That(badge.pickingMode, Is.EqualTo(historyBadge ? PickingMode.Position : PickingMode.Ignore));
 +                }
 +                Assert.That(root.Q<Button>("chat-v2-history-session-session").ClassListContains("chat-v2-history-item--active"), Is.True);
 +                if (sourceName != null) Assert.That(root.Q<Button>("chat-v2-history-session-session").tooltip, Does.Contain(expectedState));
@@ -3395,6 +3451,9 @@ index 551dcc53e..70278ba33 100644
 +                Assert.That(root.Q<Button>(row.name), Is.SameAs(row));
 +                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").Q<Label>("state").text, Is.EqualTo("Local copy"));
 +                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").text, Is.EqualTo("Claude"));
++                var icon = row.Q<VisualElement>("source-icon");
++                Assert.That(icon.ClassListContains("chat-v2-history-origin-icon--claude"), Is.True);
++                Assert.That(row.tooltip, Does.Contain("Claude").And.Contain("Local copy"));
 +                type.GetMethod("Bind").Invoke(external, new object[] { root, null, null, null, null, (Action)history.RefreshSourceBadges });
 +                type.GetMethod("ApplySession").Invoke(external, new object[] { "native", null });
 +                history.SetSourceResolver(null);
@@ -3403,6 +3462,7 @@ index 551dcc53e..70278ba33 100644
 +                Assert.That(root.Q<VisualElement>("chat-v2-header-origin").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
 +                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").Q<Label>("source").text, Is.EqualTo("Phase Pal"));
 +                Assert.That(row.Q<VisualElement>("chat-v2-history-origin-session").style.display.value, Is.EqualTo(DisplayStyle.None));
++                Assert.That(icon.ClassListContains("chat-v2-history-origin-icon--claude"), Is.False);
 +            }
 +            finally { external.Dispose(); }
 +        }
@@ -3674,3 +3734,223 @@ index 64d368df7..31bff0c83 100644
          [TestCase(false)]
          [TestCase(true)]
          public void CurrentVisibleRequest_UsesSessionIdentityForSharedHistory(bool globalIdentity)
+diff --git a/NOTICE b/NOTICE
+index 275c141ef..89433737d 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -101,3 +101,13 @@ No Trademark Grant
+ 
+ Phase Pal names, marks, logos, app icons, and store assets are not licensed by
+ the root source license. Use of those marks requires separate permission.
++
++Lobe Icons — ChatV2 history source marks
++
++The source PNG marks under
++Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/ are rendered
++from Lobe Icons revision 05a9b8c41e4735a4a2b6d2f1e43574bd8ec6c8cb.
++Copyright (c) 2023 LobeHub. MIT license; keep SourceIcons/LICENSE.txt and
++SourceIcons/NOTICE.md with these images. The marks identify compatible
++conversation sources and do not imply endorsement by the trademark owners.
++Source: https://github.com/lobehub/lobe-icons
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/LICENSE.txt b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/LICENSE.txt
+new file mode 100644
+index 000000000..1dd53d2a9
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/LICENSE.txt	
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2023 LobeHub
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/NOTICE.md b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/NOTICE.md
+new file mode 100644
+index 000000000..4a1b83bf5
+--- /dev/null
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/NOTICE.md	
+@@ -0,0 +1,15 @@
++# ChatV2 source icons
++
++The transparent white PNG marks identify ChatGPT, Claude, Codex, and Claude Code.
++They are 64-pixel raster versions of Lobe Icons SVGs, rendered for 16-pixel themed
++history indicators. No third-party package is required at runtime.
++
++Owner/publisher: LobeHub. Copyright (c) 2023 LobeHub.
++Source: https://github.com/lobehub/lobe-icons/tree/05a9b8c41e4735a4a2b6d2f1e43574bd8ec6c8cb/packages/static-svg/icons
++Input files: openai.svg, claude.svg, codex.svg, claudecode.svg.
++License: MIT; see LICENSE.txt in this folder.
++Classification: third-party-reviewed, generated UI images; redistributable with
++this notice and the MIT license.
++
++The names and marks are trademarks of their respective owners. Their use here
++identifies conversation sources and does not imply endorsement.
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/chatgpt.png b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/chatgpt.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9a0c9c13122955b2a3aadb11775ed7af6a8e8b8
+GIT binary patch
+literal 2095
+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
+Z{|jHpe>0vDhNu7l002ovPDHLkV1kuQw$cCq
+
+literal 0
+HcmV?d00001
+
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/claude-code.png b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/claude-code.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..2234431507fa34a8e259232d230f821f8ca41a6f
+GIT binary patch
+literal 282
+zcmeAS@N?(olHy`uVBq!ia0vp^4j|0I1|(Ny7TyC=oCO|{#S9GAd?3ttX4}GMpx_x#
+z7srr_TW@d0ay2=KGz5NJ8nYmKr7g?Oh83(=qKdq)JvQhv`giog&j)s~iC-=>d$=lk
+zPEzrFb-nbi_T$QRj1x+Mh5*5VZ4BEJ<g9Hj+gg3z&Tw(-aajhw;`jUz$rttys*{#+
+zt<NoI$Pm91pTDX8a`c~N9AL?RG7n4)cb3aZ$G1QfHv~3#8=O5L`S73B#`(sDzNhNm
+z+IxqrjBhdf!5XGn4N;U}+wjS{)I#(3%=Bv)r)X9K-ITe5f2v8i-@*;rt3hf!UHx3v
+IIVCg!0On9-L;wH)
+
+literal 0
+HcmV?d00001
+
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/claude.png b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/claude.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac7002338306488fb2b315d7071270a3a6d64bb4
+GIT binary patch
+literal 1837
+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
+b)7bw2N{~=InQum%00000NkvXXu0mjftUFrl
+
+literal 0
+HcmV?d00001
+
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/codex.png b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/codex.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..cdabe0a8fcb1317a0fa5799e580ad671e38a99ca
+GIT binary patch
+literal 1057
+zcmV++1m63JP)<h;3K|Lk000e1NJLTq002M$002M;1^@s6s%dfF00009a7bBm0027<
+z0027<0nE0cg8%>n(@8`@RCwCun|)}_Q5eUsEylcTnNT)F(f;+4R!Cx5O@s|$S+iEg
+zADWj)(PsF=KTGBhl$rOH8bh*~mn5;2$y-Sl^ZqhpW7y++y65WGb?$c0?{|Lpp7YyN
+zpYC7x>3pAae&;;r<?;DkG9nrQ)_|kn0eBBOK`VF(E`ePj1H}5gVh}SM)Pg@0zBTh;
+zB$+IH45%Y#_7M~sHzLsBMc^B$vkM^66!GgMhkLm81Z0CEa1dO!Pzg5j&#g~1#pm*g
+zEt<wYn{qHI(&DFrU!;$*j;H`bA|ZYNctLs^TW%M+9e`5O+t{46)-Caac`{>yZE+(2
+zMP!b#k&vM}0Jq63V{<~XQ_+ba4_qZPt-`MGc(4h4A+zl_NR<^o5j-dF*by1=D?vMX
+z%h)LH9gg^X@~+M7PW)W{y?E7%yAq#bP=aIE4s{iPGvs}{7)pFP^$fciDgZS$9lil`
+zz#y=|fKRAaBtF@}#Frc7D^K$PRH@$F%n0%o0~$0Az&23;Djhg16Zo5^aR63`0&vfP
+z!=GTBz~^aA1Mu*_(`J6C=)|f80T``uD$Q=BVyumAQQ$P)uw%2;)`qHBy6#iZZ4UVl
+zPMb9i0PFOjfrh?T<g_5fu2NSk2{iJSB8Trlf?!#^t7!n(+!x0hc|f7lJ%Uk?sqrXC
+z_wf`~*)k&tz<7-VP!^c1RORrQf&gsLH~{s5MwTmZRwEEUO!EWPCTrsI!-b6Su;!bi
+zR%>H-I&f4f5T8cTzdG;EI;;(jv$-#50{w%;$7;SS{I?W}a(LP7EnCq01(H6RdA=aa
+zCx-!O6zvXkBph53{67hNknm9qdfB|WVx#tig8-ZqIo&GZAWQK7{gT;ZjKh1&;Yv0|
+z7Kf)K94ra??*z%?wO5MXD|FhtIv*)=ctz$LVr#vnCmL-uq|kwQw%6Eav-i)3a(YM7
+zQ9GaU+Z+tV27ZbpLlt<c>O9jLfNSJ^JKK|Qh(3dqt^%;b!{XUwxwyNDWxj{S7lt#l
+z4)oyT2)0>UC9}L#c}V;-Fj;neo$dkQU%_rRqU|Ob^@a++PX0^U1g9xxD)?@g_&U|E
+zLYEsBfGjuO2A3Ej{w=vxJwpE1qPp99w`&A)G=2i}81#)qrN~%Nt(kasnmr}b^+IX<
+zD5{O3pWZHuX4P0czx&$`j+4Kn?FRp4+2m%hl>8-d<iZQ^d{b%*6Tmrz;@N5NJkzR6
+zV|bCJ(<eFXP2(t&Ym5{5^O+XO158#<JIhN|=KaWjHNThqr8tlH2Bw3L5_U^<j9;>(
+bxYdrobr(RC7cDi&00000NkvXXu0mjf0TuK6
+
+literal 0
+HcmV?d00001
+
+diff --git a/plans/open-source-asset-scope-inventory-2026-06-28.md b/plans/open-source-asset-scope-inventory-2026-06-28.md
+index 97a593fa1..c7ed375f6 100644
+--- a/plans/open-source-asset-scope-inventory-2026-06-28.md
++++ b/plans/open-source-asset-scope-inventory-2026-06-28.md
+@@ -586,3 +586,9 @@ model, animation media, or package is included.
+ | Asset | Owner and method | License and notices | Classification |
+ |---|---|---|---|
+ | `Phase Pal/Assets/_PhasePal/UI/Sprites/Emotion/sigh.png` | Consistency AI project contribution; original generic shape made with the built-in OpenAI imagegen tool. No screenshot pixels or character likeness. | MIT terms in root `LICENSE`, expressly applied to this sprite in `Phase Pal/Docs/SighSpriteEffect.md`; keep the MIT notice. No extra third-party notice. | `public-source`; generated source artwork; redistribution permitted under the stated MIT terms. |
++
++## ChatV2 history source icons — 2026-10-13
++
++| Assets | Owner and acquisition | License and notices | Classification |
++|---|---|---|---|
++| `Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/SourceIcons/{chatgpt,claude,codex,claude-code}.png` | LobeHub; rasterized as transparent white 64-pixel PNGs from `openai.svg`, `claude.svg`, `codex.svg`, and `claudecode.svg` in https://github.com/lobehub/lobe-icons/tree/05a9b8c41e4735a4a2b6d2f1e43574bd8ec6c8cb/packages/static-svg/icons | MIT; local `SourceIcons/LICENSE.txt` and `SourceIcons/NOTICE.md`, aggregated in root `NOTICE`. Copyright (c) 2023 LobeHub. Product trademarks remain with their owners; use is nominative. | `third-party-reviewed`; generated UI images, redistributable with the license and notices. |
