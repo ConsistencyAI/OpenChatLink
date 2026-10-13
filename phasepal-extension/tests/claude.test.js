@@ -52,12 +52,36 @@ test('Claude bounded passes resume chosen chats without duplicating accepted wor
     push: async (_source, _adapter, rows) => {received.push(rows[0].externalId); return 1;}};
   const first = await syncClaude(options);
   assert.equal(first.hasMore, true);
-  const second = await syncClaude({...options, state: first.state});
-  assert.equal(second.hasMore, false); assert.deepEqual(received, ids);
+  let result = await syncClaude({...options, state: first.state});
+  for (let pass = 0; result.hasMore && pass < 3; pass++) result = await syncClaude({...options, state: result.state});
+  assert.equal(result.hasMore, false); assert.deepEqual(received, ids);
 });
 test('failed Claude details keep the watermark for an explicit retry', async t => {
   mock(t, {failure: true});
   const result = await syncClaude({preferences: {selected: [{accountId: org, id: ids[0]}]},
     push: async () => assert.fail('failed detail was sent')});
   assert.equal(result.failures, 1); assert.equal(result.state.lastSyncMs, 0);
+});
+
+test('Claude continuation retains the first batch watermark so edits during a long import are retried', async t => {
+  const beforeFetch = globalThis.fetch, beforeNow = Date.now;
+  let clock = 1700000000000;
+  Date.now = () => clock;
+  t.after(() => {globalThis.fetch = beforeFetch; Date.now = beforeNow;});
+  const rows = ids.map(uuid => ({uuid, name: 'chat', updated_at: new Date(clock - 1000).toISOString()}));
+  globalThis.fetch = async value => {
+    const url = new URL(value);
+    const data = url.pathname === '/api/organizations' ? [{uuid: org}]
+      : url.pathname.endsWith('/chat_conversations') ? rows.slice(Number(url.searchParams.get('offset') ?? 0))
+      : {chat_messages: [{uuid: 'root', sender: 'human', text: 'message'}]};
+    return {ok: true, status: 200, json: async () => data};
+  };
+  const pushed = [], options = {maxConversations: 1, preferences: {chats: 'all'},
+    push: async (_source, _adapter, chats) => {pushed.push(chats[0].externalId); return 1;}};
+  const started = clock, first = await syncClaude(options);
+  clock += 10000; rows[0].updated_at = new Date(clock).toISOString(); clock += 600000;
+  const second = await syncClaude({...options, state: first.state});
+  assert.equal(second.state.lastSyncMs, started);
+  const third = await syncClaude({...options, state: second.state});
+  assert.equal(third.conversations, 1); assert.deepEqual(pushed, [ids[0], ids[1], ids[0]]);
 });

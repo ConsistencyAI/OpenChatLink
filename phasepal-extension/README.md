@@ -51,8 +51,11 @@ and Claude Code subagent folders are skipped. Limits are 10,000 files/directorie
 64 MiB per file, and 20,000 visible messages per chat. The app reports read failures
 or size limits in External Conversations. Source files are never changed.
 
-Disconnect pauses local collection and stops browser collection. Turning sync off
-or disabling Store Chat History in Phase Pal stops both. Saved selections remain.
+Disconnect pauses local collection and stops browser collection. It still clears
+browser pairing and alarms if Phase Pal is closed.
+If the app cannot confirm the local pause, disable External Conversations in Phase
+Pal to stop its local reader. Turning sync off or disabling Store Chat History in
+Phase Pal stops both. Saved selections remain.
 
 Only visible user/assistant text and timestamps are imported. Attachments, hidden
 reasoning, system instructions, tool execution, saved memory, and assistant

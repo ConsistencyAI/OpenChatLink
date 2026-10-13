@@ -55,16 +55,17 @@ export async function syncClaude({state = {}, push, preferences = {}, signal, re
   preferences = normalizePreferences(preferences);
   if (!canCollect(preferences)) return {state: {}, conversations: 0, hasMore: false};
   const selected = new Set(preferences.selected.map(row => conversationKey(row.accountId, row.id)));
-  let cursor = state.cursor ?? null, count = 0, processed = 0, failures = state.pendingFailures ?? 0;
-  const started = Date.now(), previous = state.lastSyncMs ?? 0, seen = new Set(state.seen ?? []);
+  let cursor = state.cursor ?? null, count = 0, processed = 0, inspected = 0, failures = state.pendingFailures ?? 0;
+  const started = Date.now(), runStarted = state.runStartedMs ?? started, previous = state.lastSyncMs ?? 0, seen = new Set(state.seen ?? []);
   for (;;) {
     signal?.throwIfAborted();
     const page = await listClaudeConversations({cursor, signal});
     for (let i = 0; i < page.items.length; i++) {
       const item = page.items[i], key = conversationKey(item.accountId, item.id);
+      if (processed >= maxConversations || (inspected > 0 && Date.now() - started >= 20000))
+        return {state: {cursor: {orgIndex: cursor?.orgIndex ?? 0, offset: (cursor?.offset ?? 0) + i}, seen: [...seen].slice(-5000), lastSyncMs: previous, runStartedMs: runStarted, pendingFailures: failures}, conversations: count, hasMore: true, failures};
+      inspected++;
       if ((preferences.chats !== 'all' && !selected.has(key)) || seen.has(key) || (previous && item.updatedAt && item.updatedAt <= previous - 300000)) continue;
-      if (processed >= maxConversations || Date.now() - started >= 20000)
-        return {state: {cursor: {orgIndex: cursor?.orgIndex ?? 0, offset: (cursor?.offset ?? 0) + i}, seen: [...seen].slice(-5000), lastSyncMs: previous, pendingFailures: failures}, conversations: count, hasMore: true, failures};
       if (processed) await sleep(400, signal);
       let conversation;
       try {
@@ -77,5 +78,5 @@ export async function syncClaude({state = {}, push, preferences = {}, signal, re
     cursor = page.nextCursor;
     if (!cursor) break;
   }
-  return {state: {lastSyncMs: failures ? previous : started}, conversations: count, hasMore: false, failures};
+  return {state: {lastSyncMs: failures ? previous : runStarted}, conversations: count, hasMore: false, failures};
 }

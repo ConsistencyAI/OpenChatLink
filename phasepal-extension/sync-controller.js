@@ -160,9 +160,16 @@ export function createSourceController(api, {fetcher, collectors = {}, catalogs 
     },
     alarm(name) {const source = name.split(':')[1]; return browsers[source]?.alarm(name.split(':')[0]) ?? Promise.resolve();},
     async disconnect() {
-      if ((await api.storage.local.get('code')).code) await (await client()).pauseLocal();
-      for (const controller of Object.values(browsers)) await controller.disconnect();
-      for (const source of ['codex', 'claude-code']) await sourceApi(source).storage.local.set({status: {message: 'Disconnected.', running: false}});
+      // Capture the app client before clearing shared pairing. Stop browser work
+      // even when the app is closed or its connection code has been revoked.
+      const pairing = (await api.storage.local.get('code')).code;
+      const app = pairing ? createClient(parsePairing(pairing), fetcher) : null;
+      await Promise.all(Object.values(browsers).map(controller => controller.disconnect()));
+      let pauseFailed = false;
+      if (app) {try {await app.pauseLocal();} catch {pauseFailed = true;}}
+      for (const source of ['codex', 'claude-code']) await sourceApi(source).storage.local.set({status: {
+        message: pauseFailed ? 'Browser disconnected. Local sync could not be paused. Disable External Conversations in Phase Pal to stop local sync.' : 'Disconnected.', running: false}});
+      if (pauseFailed) throw new Error('Browser disconnected. Local sync could not be paused. Disable External Conversations in Phase Pal to stop local sync.');
     },
   };
 }

@@ -61,17 +61,17 @@ async function listAccounts(token, signal) {
   throw new Error('Could not identify a personal ChatGPT account. Open ChatGPT and switch to your personal account, then try again.');
 }
 
-async function* listUpdatedConversations(token, accountId, sinceMs, signal) {
-  for (let offset = 0; ; offset += PAGE_SIZE) {
+async function* listUpdatedConversations(token, accountId, sinceMs, signal, startOffset = 0) {
+  for (let offset = startOffset; ; offset += PAGE_SIZE) {
     const data = await fetchJson(
       `${BASE}/backend-api/conversations?offset=${offset}&limit=${PAGE_SIZE}&order=updated`,
       { headers: authHeaders(token, accountId), signal }
     );
     const items = data?.items ?? [];
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       const updatedMs = toMs(item.update_time);
       if (sinceMs && updatedMs && updatedMs <= sinceMs) return;
-      yield item;
+      yield {item, offset: offset + index};
     }
     if (items.length < PAGE_SIZE || offset + PAGE_SIZE >= (data?.total ?? 0)) return;
   }
@@ -317,9 +317,11 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
   let total = 0;
   let detected = 0;
   let processed = 0;
+  let inspected = 0;
   let failed = 0;
 
-  for (const account of accounts) {
+  const resumeIndex = Math.max(0, accounts.findIndex(account => account.id === state?.resumeAccount));
+  for (const account of accounts.slice(resumeIndex)) {
     const key = account.id ?? 'default';
     const sourceId = account.id && account.isWorkspace ? `chatgpt-web-${key}` : 'chatgpt-web';
     await register(sourceId, 'chatgpt-web');
@@ -327,12 +329,20 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = state?.accounts?.[key]?.runStartedMs ?? Date.now();
     const seen = {...state?.accounts?.[key]?.seen};
-    let failures = 0;
+    let failures = state?.accounts?.[key]?.pendingFailures ?? 0;
+    failed += failures;
 
     let batch = [];
     let first = true;
-    for await (const item of listUpdatedConversations(token, account.id, since, signal)) {
+    for await (const {item, offset} of listUpdatedConversations(token, account.id, since, signal, state?.accounts?.[key]?.offset ?? 0)) {
       signal?.throwIfAborted();
+      if (processed >= maxConversations || (inspected > 0 && Date.now() >= deadline)) {
+        if (batch.length) total += await push(sourceId, 'chatgpt-web', batch);
+        newState.resumeAccount = key;
+        newState.accounts[key] = {lastSyncMs, runStartedMs, seen, offset, pendingFailures: failures, name: account.name};
+        return {state: newState, conversations: total, hasMore: true, failures: failed};
+      }
+      inspected++;
       if (!isConversationId(item.id) || (preferences.chats === 'selected' && !selected.has(conversationKey(account.id, item.id)))) continue;
       const version = toMs(item.update_time) ?? 0;
       if (seen[item.id] === version) continue;
@@ -361,11 +371,6 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
         total += await push(sourceId, 'chatgpt-web', batch);
         batch = [];
       }
-      if (processed >= maxConversations || Date.now() >= deadline) {
-        if (batch.length) total += await push(sourceId, 'chatgpt-web', batch);
-        newState.accounts[key] = {lastSyncMs, runStartedMs, seen, name: account.name};
-        return {state: newState, conversations: total, hasMore: true, failures: failed};
-      }
     }
     if (batch.length > 0) {
       total += await push(sourceId, 'chatgpt-web', batch);
@@ -382,6 +387,7 @@ export async function syncChatGPT({ state, push, register = async () => {}, log,
       ...(failures > 0 ? {runStartedMs, seen} : {}),
       name: account.name,
     };
+    delete newState.resumeAccount;
   }
 
   await report({ phase: 'complete', detected, processed });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {syncChatGPT, listChatGPTConversations} from '../providers/chatgpt.js';
+import {syncClaude} from '../providers/claude.js';
 import {sleep} from '../lib/common.js';
 
 test('personal collection checkpoints bounded runs and resumes without re-fetching accepted chats', async () => {
@@ -12,7 +13,7 @@ test('personal collection checkpoints bounded runs and resumes without re-fetchi
     if (url.endsWith('/api/auth/session')) payload={accessToken:'synthetic-browser-token'};
     else if (url.includes('/accounts/check')) payload={accounts:{personal:{account:{account_id:'personal-id',structure:'personal'}},
       team:{account:{account_id:'team-id',structure:'workspace'}}}};
-    else if (url.includes('/conversations?')) payload={items:ids.map(id=>({id,update_time:1700000000})),total:2};
+    else if (url.includes('/conversations?')) payload={items:ids.slice(Number(new URL(url).searchParams.get('offset'))).map(id=>({id,update_time:1700000000})),total:2};
     else {
       const id=url.split('/').at(-1); fetched.push(id);
       payload={title:'Synthetic chat',create_time:1700000000,update_time:1700000000,current_node:'reply',
@@ -33,12 +34,70 @@ test('personal collection checkpoints bounded runs and resumes without re-fetchi
     assert.equal(result.hasMore,true);
     assert.equal(Object.values(result.state.accounts)[0].lastSyncMs,null);
     result=await syncChatGPT({state:result.state,push,log:()=>{},maxConversations:1,preferences:{chats:'all'}});
-    assert.equal(result.hasMore,true);
-    result=await syncChatGPT({state:result.state,push,log:()=>{},maxConversations:1,preferences:{chats:'all'}});
     assert.equal(result.hasMore,undefined);
     assert.deepEqual(fetched,ids);
     assert.deepEqual(pushed,ids);
   } finally {globalThis.fetch=fetchBefore;}
+});
+
+for (const source of ['chatgpt', 'claude']) test(`${source} bounds catalog scans and resumes when selected chats are absent`, async t => {
+  const beforeFetch = globalThis.fetch, beforeNow = Date.now;
+  let clock = 1700000000000;
+  Date.now = () => clock;
+  t.after(() => {globalThis.fetch = beforeFetch; Date.now = beforeNow;});
+  const accountId = 'aaaaaaaa-0000-4000-8000-000000000001', offsets = [];
+  const id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
+  globalThis.fetch = async value => {
+    const url = new URL(value); let data;
+    if (url.pathname.endsWith('/api/auth/session')) data = {accessToken: 'synthetic'};
+    else if (url.pathname.includes('/accounts/check')) data = {accounts: {personal: {account: {account_id: accountId, structure: 'personal'}}}};
+    else if (url.pathname === '/api/organizations') data = [{uuid: accountId}];
+    else {
+      const offset = Number(url.searchParams.get('offset')); offsets.push(offset); clock += 10000;
+      const rows = offset < 150 ? Array.from({length: 50}, (_, index) => ({id: id(offset + index + 100), uuid: id(offset + index + 100), update_time: 1700000000, updated_at: '2023-11-14T22:13:20Z'})) : [];
+      data = source === 'chatgpt' ? {items: rows, total: 150} : rows;
+    }
+    return {ok: true, status: 200, json: async () => data};
+  };
+  const collector = source === 'chatgpt' ? syncChatGPT : syncClaude;
+  let state = {}, result;
+  for (let pass = 0; pass < 5; pass++) {
+    const started = clock;
+    result = await collector({state, preferences: {selected: [{accountId, id: id(1)}]}, log: () => {},
+      push: async () => assert.fail('unselected chat imported')});
+    assert.ok(clock - started <= 20000);
+    state = result.state;
+    if (!result.hasMore) break;
+  }
+  assert.ok(!result.hasMore); assert.equal(result.conversations, 0);
+  assert.deepEqual(offsets, source === 'chatgpt' ? [0, 50, 50, 100, 100] : [0, 50, 50, 100, 100, 150]);
+});
+
+for (const source of ['chatgpt', 'claude']) test(`${source} advances its cursor when a catalog request consumes the time budget`, async t => {
+  const beforeFetch = globalThis.fetch, beforeNow = Date.now;
+  let clock = 1700000000000;
+  Date.now = () => clock;
+  t.after(() => {globalThis.fetch = beforeFetch; Date.now = beforeNow;});
+  const accountId = 'aaaaaaaa-0000-4000-8000-000000000001', offsets = [];
+  const ids = [1, 2].map(number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0'));
+  globalThis.fetch = async value => {
+    const url = new URL(value); let data;
+    if (url.pathname.endsWith('/api/auth/session')) data = {accessToken: 'synthetic'};
+    else if (url.pathname.includes('/accounts/check')) data = {accounts: {personal: {account: {account_id: accountId, structure: 'personal'}}}};
+    else if (url.pathname === '/api/organizations') data = [{uuid: accountId}];
+    else {
+      const offset = Number(url.searchParams.get('offset')); offsets.push(offset); clock += 21000;
+      const rows = ids.slice(offset).map(id => ({id, uuid: id, update_time: 1700000000, updated_at: '2023-11-14T22:13:20Z'}));
+      data = source === 'chatgpt' ? {items: rows, total: 2} : rows;
+    }
+    return {ok: true, status: 200, json: async () => data};
+  };
+  const options = {preferences: {selected: [{accountId, id: '00000000-0000-4000-8000-000000000099'}]}, log: () => {}, push: async () => assert.fail('unselected chat imported')};
+  const collector = source === 'chatgpt' ? syncChatGPT : syncClaude;
+  const first = await collector({state: {}, ...options});
+  assert.equal(first.hasMore, true);
+  const second = await collector({state: first.state, ...options});
+  assert.ok(!second.hasMore); assert.deepEqual(offsets, [0, 1]);
 });
 
 test('revocation cancels pacing without waiting for the timer',async()=>{

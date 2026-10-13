@@ -46,21 +46,19 @@ Python script, hstry database, or additional Unity package is required.
 
 ## Verification
 
-32 managed cases passed with production history stores, the authenticated HTTP
-receiver, and synthetic local JSONL files. 27 Node cases passed, including Claude
-organization/branch isolation, bounded collection, and separate source controls.
-Core, Runtime, Toolkit, and Platform compiled initially; Core, Runtime, and Platform
-were recompiled after initial reader changes. Final receiver/reader sources
-compiled directly in the managed harness; a full current-worktree compile needs
-refreshed references for concurrent localization work. No Unity process was launched and no
-personal chats were accessed. Live website behavior, UI rendering, OS secret stores
-on each platform, and packaged-player QA remain separate checks.
-Upstream `just check-all` is unavailable on this host; no Rust code was changed.
+Two agent review rounds covered application sync, the extension, and UI integration.
+Fixes passed 54 managed cases, 34 Node cases, and the existing 25 offline Python
+cases. They cover registry recovery, failed preference writes, malformed local
+records, failed-chat continuation, delayed credentials, offline disconnect, slow
+catalog pages, and edits during long imports.
 
-Source badges compiled in the already-open Unity Editor and passed eight detached
-UI-tree checks against actual UXML/USS assets, including cached-row updates and
-rebind cleanup. No Play Mode, build, or Test Runner was started. Player layout QA
-remains separate.
+The current app worktree compiled in the already-open Unity Editor with no console
+errors. Direct fixture calls passed 21 projection, deferred-refresh, and source-badge
+cases, using real UXML/USS for the badge checks. No new Editor, Play Mode, build,
+or Test Runner was started, and no personal chats were accessed. Live website
+behavior, OS secret stores on each platform, and packaged-player layout remain
+separate checks. The updated full patch applies to its declared base.
+Upstream `just check-all` is unavailable on this host; no Rust code was changed.
 
 ## License
 

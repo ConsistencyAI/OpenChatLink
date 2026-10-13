@@ -318,10 +318,10 @@ index 000000000..c6154970c
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 new file mode 100644
-index 000000000..0747c7468
+index 000000000..fc73886d4
 --- /dev/null
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs	
-@@ -0,0 +1,243 @@
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
+@@ -0,0 +1,250 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 +using System;
 +using System.Collections.Concurrent;
@@ -400,7 +400,7 @@ index 000000000..0747c7468
 +                else if (enabled) await SetEnabledAsync(true, _characterId, _characterName);
 +                else MarkChanged();
 +            }
-+            catch (Exception) { if (!_disposed && !_suspended) SetStatus("External sync could not start. Check local settings and try again."); }
++            catch (Exception) { if (IsCurrent(generation)) SetStatus("External sync could not start. Check local settings and try again."); }
 +        }
 +
 +        /// <inheritdoc />
@@ -411,9 +411,11 @@ index 000000000..0747c7468
 +            StopReceiver();
 +            _enabled = enabled;
 +            SetStatus(enabled ? "Connecting OpenChatLink…" : "External conversation sync is off.");
-+            await _settingsWriter.WaitAsync(_hostLifetime.Token);
++            bool ownsWriter = false;
 +            try
 +            {
++                await _settingsWriter.WaitAsync(_hostLifetime.Token);
++                ownsWriter = true;
 +                if (generation != _generation || _disposed || _suspended) return;
 +                if (enabled && (!_historyConsent || !PhasePalOwnedPathService.IsStrictIdentifier(characterId)))
 +                { _enabled = false; SetStatus("Enable Store Chat History and select an avatar before connecting."); return; }
@@ -429,7 +431,9 @@ index 000000000..0747c7468
 +                if (generation != _generation || _disposed || _suspended || (enabled && !_historyConsent)) return;
 +                if (!enabled)
 +                { await _secrets.DeleteAsync(); _token = null; return; }
-+                if (!await Task.Run(() => _secrets.IsAvailable))
++                bool available = await Task.Run(() => _secrets.IsAvailable);
++                if (!IsCurrent(generation) || !_historyConsent) return;
++                if (!available)
 +                { SetStatus("Secure storage is unavailable. External sync cannot start."); return; }
 +                ChatV2ExternalMemorySecretLoadResult loaded = await _secrets.LoadAsync();
 +                if (generation != _generation || _disposed || _suspended || !_historyConsent) return;
@@ -440,7 +444,9 @@ index 000000000..0747c7468
 +                    var bytes = new byte[32];
 +                    using (RandomNumberGenerator random = RandomNumberGenerator.Create()) random.GetBytes(bytes);
 +                    token = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
-+                    if (!await _secrets.SaveAsync(token))
++                    bool saved = await _secrets.SaveAsync(token);
++                    if (!IsCurrent(generation) || !_historyConsent) return;
++                    if (!saved)
 +                    { SetStatus("Could not save the connection securely. Try again."); return; }
 +                }
 +                if (generation != _generation || _disposed || _suspended || !_historyConsent) return;
@@ -476,8 +482,8 @@ index 000000000..0747c7468
 +            }
 +            catch (OperationCanceledException) { }
 +            catch (Exception)
-+            { StopReceiver(); SetStatus("The local sync connection could not start. Close another Phase Pal instance and try again."); }
-+            finally { _settingsWriter.Release(); }
++            { if (IsCurrent(generation)) { StopReceiver(); SetStatus("The local sync connection could not start. Close another Phase Pal instance and try again."); } }
++            finally { if (ownsWriter) _settingsWriter.Release(); }
 +        }
 +
 +        /// <inheritdoc />
@@ -503,6 +509,7 @@ index 000000000..0747c7468
 +        }
 +
 +        private void SetStatus(string text) { _statusText = text; MarkChanged(); }
++        private bool IsCurrent(int generation) => generation == _generation && !_disposed && !_suspended;
 +        private void MarkChanged() => Interlocked.Exchange(ref _dirty, 1);
 +        /// <summary>Publishes completed imports and consent changes on the Unity thread.</summary>
 +        public IReadOnlyList<string> Tick(bool historyConsent)
@@ -567,10 +574,10 @@ index 000000000..0747c7468
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
 new file mode 100644
-index 000000000..f2e831bf2
+index 000000000..f2bd85e67
 --- /dev/null
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs	
-@@ -0,0 +1,258 @@
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
+@@ -0,0 +1,281 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationStore.cs
 +using System;
 +using System.Collections.Generic;
@@ -602,6 +609,7 @@ index 000000000..f2e831bf2
 +        {
 +            public string SessionId, Source, ExternalId, AccountId, AssignedCharacterId, AssignedCharacterName;
 +            public string SourceTitle, HistoryHash, OriginalSessionId;
++            public string PendingHistoryHash, PendingTitle;
 +            public bool Deleted;
 +        }
 +
@@ -643,6 +651,20 @@ index 000000000..f2e831bf2
 +            File.WriteAllText(temporary, json);
 +            if (File.Exists(_statePath)) File.Replace(temporary, _statePath, _statePath + ".bak");
 +            else File.Move(temporary, _statePath);
++        }
++
++        private void PersistRecord(string sessionId, Record record)
++        {
++            Record previous;
++            lock (_recordsGate) { _records.TryGetValue(sessionId, out previous); _records[sessionId] = record; }
++            try { Save(); }
++            catch {
++                lock (_recordsGate) {
++                    if (previous == null) _records.Remove(sessionId);
++                    else _records[sessionId] = previous;
++                }
++                throw;
++            }
 +        }
 +
 +        /// <summary>Loads ownership records on a history worker.</summary>
@@ -758,10 +780,11 @@ index 000000000..f2e831bf2
 +                IReadOnlyList<ChatV2Message> incoming = ParseMessages(conversation, sid, assignedCharacterId, assignedCharacterName);
 +                if (incoming.Count == 0) return (sid, false, false, false);
 +                ChatV2SessionSummary summary = _history.GetSessionSummary(assignedCharacterId, sid);
-+                if (record != null && summary == null)
++                if (record != null && summary == null && string.IsNullOrEmpty(record.PendingHistoryHash))
 +                {
-+                    lock (_recordsGate) record.Deleted = true;
-+                    Save();
++                    Record deleted = JsonConvert.DeserializeObject<Record>(JsonConvert.SerializeObject(record));
++                    deleted.Deleted = true;
++                    PersistRecord(sid, deleted);
 +                    return (sid, false, false, false);
 +                }
 +                IReadOnlyList<ChatV2Message> existing = summary == null ? Array.Empty<ChatV2Message>() :
@@ -769,22 +792,29 @@ index 000000000..f2e831bf2
 +                string currentHash = Fingerprint(existing), incomingHash = Fingerprint(incoming);
 +                // An identical retry can recover a completed file write whose registry save failed.
 +                if (summary != null && currentHash != incomingHash &&
-+                    (record == null || record.HistoryHash != currentHash))
++                    (record == null || (record.HistoryHash != currentHash && record.PendingHistoryHash != currentHash)))
 +                    return (sid, true, false, false);
-+                string chosenTitle = record != null && summary != null && summary.Title != record.SourceTitle
++                string chosenTitle = record != null && summary != null && summary.Title != record.SourceTitle && summary.Title != record.PendingTitle
 +                    ? summary.Title : title;
-+                if (record != null && currentHash == incomingHash && record.SourceTitle == title)
++                if (record != null && string.IsNullOrEmpty(record.PendingHistoryHash) && currentHash == incomingHash && record.SourceTitle == title)
 +                    return (sid, false, true, false);
++                token.ThrowIfCancellationRequested();
++                // Save ownership and the recovery hash before any history write. A failed write
++                // must retain its first home and must not become a deletion after restart.
++                var pending = new Record { SessionId = sid, Source = source,
++                    ExternalId = id.ToString("D"), AccountId = account, AssignedCharacterId = assignedCharacterId,
++                    AssignedCharacterName = assignedCharacterName, SourceTitle = record?.SourceTitle,
++                    HistoryHash = record?.HistoryHash ?? currentHash, PendingHistoryHash = incomingHash, PendingTitle = chosenTitle };
++                PersistRecord(sid, pending);
 +                token.ThrowIfCancellationRequested();
 +                if (currentHash != incomingHash || summary?.Title != chosenTitle)
 +                {
 +                    if (!_history.ImportSession(assignedCharacterId, sid, chosenTitle, incoming, updatedAt, overwrite: true))
 +                        throw new IOException("Conversation history could not be saved.");
 +                }
-+                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, Source = source,
++                PersistRecord(sid, new Record { SessionId = sid, Source = source,
 +                    ExternalId = id.ToString("D"), AccountId = account, AssignedCharacterId = assignedCharacterId,
-+                    AssignedCharacterName = assignedCharacterName, SourceTitle = title, HistoryHash = incomingHash };
-+                Save();
++                    AssignedCharacterName = assignedCharacterName, SourceTitle = title, HistoryHash = incomingHash });
 +                return (sid, false, true, true);
 +            }
 +            finally { _writer.Release(); }
@@ -817,12 +847,12 @@ index 000000000..f2e831bf2
 +                }
 +                token.ThrowIfCancellationRequested();
 +                string title = (_history.GetSessionSummary(original.AssignedCharacterId, sessionId)?.Title ?? SourceName(original.Source) + " conversation") + " (local copy)";
++                // The copy's source label must be durable before its writable history appears.
++                PersistRecord(sid, new Record { SessionId = sid, AssignedCharacterId = characterId,
++                    Source = original.Source, ExternalId = original.ExternalId, AccountId = original.AccountId,
++                    OriginalSessionId = sessionId });
 +                if (!_history.ImportSession(characterId, sid, title, copies, overwrite: true))
 +                    throw new IOException("Local copy could not be saved.");
-+                lock (_recordsGate) _records[sid] = new Record { SessionId = sid, AssignedCharacterId = characterId,
-+                    Source = original.Source, ExternalId = original.ExternalId, AccountId = original.AccountId,
-+                    OriginalSessionId = sessionId };
-+                Save();
 +                return sid;
 +            }
 +            finally { _writer.Release(); }
@@ -1001,20 +1031,21 @@ index 7c00eeaa2..e3f21c3d8 100644
          public ChatV2RuntimeAvailabilityStore RuntimeAvailability { get; set; }
          public ChatV2PlayerPrefsSettingsFacade Settings { get; set; }
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
-index e54922854..fe664916e 100644
---- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
-+++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
-@@ -147,6 +147,9 @@ namespace PhasePal.Services.ChatV2.Platform
+index e54922854..fa8b17a80 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
+@@ -147,6 +147,10 @@ namespace PhasePal.Services.ChatV2.Platform
          private ChatV2ResearchModeCoordinator _deepResearch;
          private ChatV2RuntimeSubmitOrchestrator _submit;
          private ChatV2SubmitCoordinator _submitCoordinator;
 +        private ChatV2ExternalConversationService _externalConversations;
 +        private Task<bool> _externalCopyTask;
++        private string _pendingExternalConversationRefresh;
 +        private CancellationTokenSource _externalCopyCancellation;
          private ChatV2SubmitRequestFactory _submitRequestFactory;
          private CancellationTokenSource _externalChatCancellation;
          private ChatV2SessionTurnKey _externalChatTarget;
-@@ -572,6 +575,8 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -572,6 +576,8 @@ namespace PhasePal.Services.ChatV2.Platform
              SceneManager.sceneUnloaded -= HandleSceneUnloaded;
              SceneManager.sceneUnloaded += HandleSceneUnloaded;
              EnsureCollaborators();
@@ -1023,25 +1054,27 @@ index e54922854..fe664916e 100644
              _avatarStatePresenter?.Start();
              BindAvatarPresentationState();
              BindScreensaverModeService();
-@@ -590,6 +595,8 @@ namespace PhasePal.Services.ChatV2.Platform
- 
+@@ -590,6 +596,9 @@ namespace PhasePal.Services.ChatV2.Platform
+
          private void OnDisable()
          {
++            _pendingExternalConversationRefresh = null;
 +            _externalCopyCancellation?.Cancel();
 +            _externalConversations?.Suspend();
              _runtimeActions?.CancelPendingLocalTtsAction();
              CancelExternalChat();
              _agentGatewayDetailsCancellation?.Cancel();
-@@ -629,6 +636,8 @@ namespace PhasePal.Services.ChatV2.Platform
- 
+@@ -629,6 +638,9 @@ namespace PhasePal.Services.ChatV2.Platform
+
          private void OnDestroy()
          {
++            _pendingExternalConversationRefresh = null;
 +            _externalCopyCancellation?.Cancel();
 +            _externalConversations?.Dispose();
              _runtimeActions?.CancelPendingLocalTtsAction();
              CancelExternalChat();
              _runtimeActions?.CancelTransparencyDiagnostics();
-@@ -812,6 +821,7 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -812,6 +824,7 @@ namespace PhasePal.Services.ChatV2.Platform
              {
                  QueueHistoryViewStateRefresh();
              }
@@ -1049,16 +1082,17 @@ index e54922854..fe664916e 100644
              ApplyPendingViewStateRefresh();
              FlushScreensaverOverlayContentRefresh();
              CompleteFrameDiagnosticStage("ChatV2.Update.ViewState", stageStarted, captureFrameDiagnostics);
-@@ -2466,6 +2476,8 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -2466,6 +2479,9 @@ namespace PhasePal.Services.ChatV2.Platform
              _sessionMessageSink = composition.SessionMessageSink;
              _sessionTitles = composition.SessionTitles;
              _historyCoordinator = composition.HistoryCoordinator;
 +            _externalConversations?.Dispose();
 +            _externalConversations = composition.ExternalConversations;
++            _pendingExternalConversationRefresh = null;
              _onboardingGate = composition.OnboardingGate;
              _onboardingCoordinator = composition.OnboardingCoordinator;
              _availabilityCoordinator = composition.AvailabilityCoordinator;
-@@ -2494,8 +2506,11 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -2494,8 +2510,11 @@ namespace PhasePal.Services.ChatV2.Platform
                  _imageGeneration.SnapshotChanged += HandleImageGenerationSnapshotChanged;
              }
              _submitCoordinator = composition.SubmitCoordinator;
@@ -1070,10 +1104,10 @@ index e54922854..fe664916e 100644
              _uploadCoordinator = composition.UploadCoordinator;
              _activationLifecycle = composition.ActivationLifecycle;
              _voiceInput = composition.VoiceInput;
-@@ -3018,6 +3033,92 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -3018,6 +3037,95 @@ namespace PhasePal.Services.ChatV2.Platform
              previousCapture?.Stop();
          }
- 
+
 +        private bool ExternalHistoryConsent => PhasePalServices.Resolve<global::ISettingsService>()?.CurrentSettings?.storeChatHistory ?? false;
 +
 +        private void ConfigureExternalConversations()
@@ -1148,29 +1182,32 @@ index e54922854..fe664916e 100644
 +        {
 +            if (_externalConversations == null) return;
 +            IReadOnlyList<string> changed = _externalConversations.Tick(ExternalHistoryConsent);
-+            if (changed.Count == 0) return;
++            string currentSession = _history?.Current?.SessionId;
++            if (_pendingExternalConversationRefresh != currentSession) _pendingExternalConversationRefresh = null;
 +            foreach (string session in changed)
-+                if (session == _history?.Current?.SessionId && _attachments.PendingItems.Count == 0 &&
-+                    _uploadCoordinator?.HasPreparingAttachments != true &&
-+                    _externalConversations.GetSessionInfo(session)?.IsLocalCopy == false)
-+                {
-+                    _historyCoordinator.StopHistoryHydration();
-+                    _historyCoordinator.TryRefreshOpenSession(session);
-+                }
-+            QueueHistoryViewStateRefresh();
++                if (session == currentSession && _externalConversations.GetSessionInfo(session)?.IsLocalCopy == false)
++                    _pendingExternalConversationRefresh = session;
++            if (_pendingExternalConversationRefresh != null && _attachments.PendingItems.Count == 0 &&
++                _uploadCoordinator?.HasPreparingAttachments != true)
++            {
++                _historyCoordinator.StopHistoryHydration();
++                _historyCoordinator.TryRefreshOpenSession(_pendingExternalConversationRefresh);
++                _pendingExternalConversationRefresh = null;
++            }
++            if (changed.Count > 0) QueueHistoryViewStateRefresh();
 +        }
 +
          private void RebuildSubmitOrchestrator()
          {
              if (_compositionService == null)
-@@ -3062,6 +3163,7 @@ namespace PhasePal.Services.ChatV2.Platform
+@@ -3062,6 +3170,7 @@ namespace PhasePal.Services.ChatV2.Platform
                  TurnLifecycleFinished = HandleAgentGatewayPresenceTurnFinished
              });
- 
+
 +            if (_submit != null) _submit.CanWriteSession = session => _externalConversations?.CanWriteSession(session) ?? true;
              RefreshAgentGatewayPresenceRoute();
          }
- 
+
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs
 index 1a6bb87c5..b74d1cd03 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2SubmitCoordinator.cs	
@@ -1515,10 +1552,10 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
          public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
-index 000000000..4c2c8f2ef
+index 000000000..8baf1c7bb
 --- /dev/null
-+++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
-@@ -0,0 +1,523 @@
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
+@@ -0,0 +1,705 @@
 +// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 +using System;
 +using System.Collections.Generic;
@@ -1590,6 +1627,93 @@ index 000000000..4c2c8f2ef
 +            corrected["messages"][0]["createdAt"] = 1720000000999L;
 +            Assert.That((await _store.ImportAsync(corrected, "avatar", "Reina", CancellationToken.None)).Changed, Is.True);
 +            Assert.That(_history.LoadPage("avatar", result.SessionId, 10)[0].CreatedAt.ToUnixTimeMilliseconds(), Is.EqualTo(1720000000999L));
++        }
++
++        private sealed class AfterImportHistory : IChatV2HistoryStore
++        {
++            private readonly IChatV2HistoryStore _inner;
++            public Action BeforeImport;
++            public Action AfterImport;
++            public AfterImportHistory(IChatV2HistoryStore inner) { _inner = inner; }
++            public string CurrentSessionId => _inner.CurrentSessionId;
++            public void SaveMessage(string character, string session, ChatV2Message message) => _inner.SaveMessage(character, session, message);
++            public bool UpdateMessage(string character, string session, ChatV2Message message) => _inner.UpdateMessage(character, session, message);
++            public bool DeleteMessage(string character, string session, ChatV2MessageId message) => _inner.DeleteMessage(character, session, message);
++            public bool TruncateFromMessage(string character, string session, ChatV2MessageId message) => _inner.TruncateFromMessage(character, session, message);
++            public IReadOnlyList<ChatV2Message> LoadPage(string character, string session, int size, string before = null) => _inner.LoadPage(character, session, size, before);
++            public IReadOnlyList<ChatV2SessionSummary> ListSessions(string character, int limit, string query = null) => _inner.ListSessions(character, limit, query);
++            public ChatV2SessionSummary GetLatestSessionSummary(string character) => _inner.GetLatestSessionSummary(character);
++            public ChatV2SessionSummary GetSessionSummary(string character, string session) => _inner.GetSessionSummary(character, session);
++            public bool ImportSession(string character, string session, string title, IReadOnlyList<ChatV2Message> messages, DateTimeOffset? modified = null, bool overwrite = false)
++            { BeforeImport?.Invoke(); bool result = _inner.ImportSession(character, session, title, messages, modified, overwrite); AfterImport?.Invoke(); return result; }
++            public bool DeleteSession(string character, string session) => _inner.DeleteSession(character, session);
++            public bool RenameSession(string character, string session, string title) => _inner.RenameSession(character, session, title);
++            public bool SetSessionPinned(string character, string session, bool pinned) => _inner.SetSessionPinned(character, session, pinned);
++        }
++
++        [TestCase(false, false, false)]
++        [TestCase(false, false, true)]
++        [TestCase(false, true, false)]
++        [TestCase(false, true, true)]
++        [TestCase(true, false, false)]
++        [TestCase(true, false, true)]
++        [TestCase(true, true, false)]
++        [TestCase(true, true, true)]
++        public async Task RegistryCommitFailureRecoversOriginalHomeAndSourceTitle(bool global, bool update, bool restart)
++        {
++            if (global) _history = new ChatV2GlobalHistoryStore(Path.Combine(_root, "ChatV2History"));
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            if (update) await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None);
++            string blocked = Path.Combine(_root, "Settings", "external_conversations.json.tmp");
++            var failing = new AfterImportHistory(_history) { AfterImport = () => Directory.CreateDirectory(blocked) };
++            _store = new ChatV2ExternalConversationStore(failing, _root);
++            JObject incoming = Conversation("Updated source reply"); incoming["title"] = "Updated source title";
++            try { await _store.ImportAsync(incoming, "avatar", "Reina", CancellationToken.None); Assert.Fail("Registry failure was ignored."); }
++            catch (UnauthorizedAccessException) { }
++            catch (IOException) { }
++            Directory.Delete(blocked);
++            failing.AfterImport = null;
++            if (restart) _store = new ChatV2ExternalConversationStore(_history, _root);
++            var recovered = await _store.ImportAsync(incoming, "other", "Other", CancellationToken.None);
++            Assert.That(recovered.Accepted, Is.True);
++            Assert.That(_store.GetInfo(recovered.SessionId).CharacterId, Is.EqualTo("avatar"));
++            Assert.That(_history.GetSessionSummary("avatar", recovered.SessionId).Title, Is.EqualTo("Updated source title"));
++            Assert.That(_history.ListSessions("other", 10), Is.Empty);
++            incoming["title"] = "Next source title";
++            Assert.That((await _store.ImportAsync(incoming, "other", "Other", CancellationToken.None)).Accepted, Is.True);
++            Assert.That(_history.GetSessionSummary("avatar", recovered.SessionId).Title, Is.EqualTo("Next source title"));
++            _store = new ChatV2ExternalConversationStore(_history, _root); _store.Initialize();
++            Assert.That(_store.GetInfo(recovered.SessionId).CharacterId, Is.EqualTo("avatar"));
++        }
++
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task OwnershipSaveFailureCannotCreateUnlabelledHistory(bool copy)
++        {
++            string original = copy ? (await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None)).SessionId : null;
++            string blocked = Path.Combine(_root, "Settings", "external_conversations.json.tmp"); Directory.CreateDirectory(blocked);
++            try {
++                if (copy) await _store.CreateLocalCopyAsync(original, "other", CancellationToken.None);
++                else await _store.ImportAsync(Conversation(), "other", "Other", CancellationToken.None);
++                Assert.Fail("Ownership failure was ignored.");
++            } catch (UnauthorizedAccessException) { } catch (IOException) { }
++            Assert.That(_history.ListSessions("other", 10), Is.Empty);
++        }
++
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task PendingImportWithoutHistoryDoesNotBecomeDeleted(bool global)
++        {
++            if (global) _history = new ChatV2GlobalHistoryStore(Path.Combine(_root, "ChatV2History"));
++            var failing = new AfterImportHistory(_history) { BeforeImport = () => throw new IOException("History unavailable.") };
++            _store = new ChatV2ExternalConversationStore(failing, _root);
++            try { await _store.ImportAsync(Conversation(), "avatar", "Reina", CancellationToken.None); Assert.Fail("History failure was ignored."); }
++            catch (IOException) { }
++            _store = new ChatV2ExternalConversationStore(_history, _root);
++            var imported = await _store.ImportAsync(Conversation(), "other", "Other", CancellationToken.None);
++            Assert.That(imported.Accepted, Is.True);
++            Assert.That(_store.GetInfo(imported.SessionId).CharacterId, Is.EqualTo("avatar"));
++            Assert.That(_history.ListSessions("other", 10), Is.Empty);
 +        }
 +
 +        [Test]
@@ -1726,6 +1850,96 @@ index 000000000..4c2c8f2ef
 +        private static JObject LocalPreferences(string history = "all", string schedule = "manual") => new JObject {
 +            ["chats"] = "all", ["selected"] = new JArray(), ["history"] = history, ["sinceDate"] = "2024-07-05", ["schedule"] = schedule
 +        };
++
++        [TestCase("codex")]
++        [TestCase("claude-code")]
++        public void LocalCatalogRefreshesTitleAfterFirstUserMessageArrives(string source)
++        {
++            string id = "00000000-0000-4000-8000-000000000001";
++            string path = WriteLocalLog(source, id, 0);
++            var local = LocalSync(source);
++            var before = JObject.FromObject(local.Catalog(source, 0, CancellationToken.None));
++            Assert.That((string)before["items"][0]["title"], Does.EndWith(" conversation"));
++            File.AppendAllText(path, LocalRow(source, id, 0, "A specific conversation").ToString(Newtonsoft.Json.Formatting.None) + "\n");
++            var after = JObject.FromObject(local.Catalog(source, 0, CancellationToken.None));
++            Assert.That((string)after["items"][0]["title"], Is.EqualTo("A specific conversation"));
++        }
++
++        [TestCase(50)]
++        [TestCase(60)]
++        public async Task FailedLocalChatsDoNotStarveContinuationOrKeepManualJobOpen(int failures)
++        {
++            var rejected = new HashSet<string>();
++            for (int i = 0; i < 60; i++) {
++                string id = Guid.NewGuid().ToString("D");
++                string path = WriteLocalLog("codex", id);
++                File.SetLastWriteTimeUtc(path, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(60 - i));
++                if (i < failures) rejected.Add(id);
++            }
++            var local = LocalSync("codex");
++            await local.ConfigureAsync("codex", LocalPreferences(), CancellationToken.None);
++            await local.RequestSyncAsync("codex", CancellationToken.None);
++            var seen = new HashSet<string>(); int calls = 0;
++            Func<JObject, CancellationToken, Task<bool>> import = (conversation, token) => {
++                string id = (string)conversation["id"]; seen.Add(id); calls++;
++                return Task.FromResult(!rejected.Contains(id));
++            };
++            await local.RunAsync(import, CancellationToken.None);
++            await local.RunAsync(import, CancellationToken.None);
++            Assert.That(seen.Count, Is.EqualTo(60));
++            Assert.That(calls, Is.EqualTo(60));
++            await local.RunAsync(import, CancellationToken.None);
++            Assert.That(calls, Is.EqualTo(60));
++        }
++
++        [TestCase("codex", "{\"type\":\"session_meta\",\"payload\":\"bad\"}")]
++        [TestCase("claude-code", "{\"isSidechain\":\"bad\"}")]
++        public async Task MalformedHeaderDoesNotBlockCatalogOrSelectedValidChat(string source, string malformed)
++        {
++            string id = "00000000-0000-4000-8000-000000000001";
++            WriteLocalLog(source, id);
++            string bad = WriteLocalLog(source, "00000000-0000-4000-8000-000000000002");
++            File.WriteAllText(bad, malformed + "\n");
++            var local = LocalSync(source);
++            JObject catalog = JObject.FromObject(local.Catalog(source, 0, CancellationToken.None));
++            Assert.That((int)catalog["failures"], Is.EqualTo(1));
++            Assert.That(((JArray)catalog["items"]).Count, Is.EqualTo(1));
++            JObject choices = LocalPreferences(); choices["chats"] = "selected";
++            choices["selected"] = new JArray(new JObject { ["id"] = id, ["accountId"] = (string)catalog["items"][0]["accountId"] });
++            await local.ConfigureAsync(source, choices, CancellationToken.None);
++            await local.RequestSyncAsync(source, CancellationToken.None);
++            int failures = await local.RunAsync(async (conversation, token) =>
++                (await _store.ImportAsync(conversation, "avatar", "Reina", token)).Accepted, CancellationToken.None);
++            Assert.That(failures, Is.EqualTo(1));
++            Assert.That(_history.ListSessions("avatar", 10).Count, Is.EqualTo(1));
++        }
++
++        [TestCase(false)]
++        [TestCase(true)]
++        public async Task FailedLocalPreferenceWritesCannotAuthorizeImports(bool manualRequest)
++        {
++            WriteLocalLog("codex", "00000000-0000-4000-8000-000000000001");
++            var local = LocalSync("codex");
++            JObject original = LocalPreferences();
++            if (!manualRequest) { original["chats"] = "selected"; original["schedule"] = "auto"; }
++            await local.ConfigureAsync("codex", original, CancellationToken.None);
++            string blocked = Path.Combine(_root, "Settings", "external_local_conversations.json.tmp");
++            Directory.CreateDirectory(blocked);
++            try {
++                if (manualRequest) await local.RequestSyncAsync("codex", CancellationToken.None);
++                else await local.ConfigureAsync("codex", LocalPreferences(schedule: "auto"), CancellationToken.None);
++                Assert.Fail("Preference write failure was ignored.");
++            } catch (IOException) { } catch (UnauthorizedAccessException) { }
++            int imports = 0;
++            await local.RunAsync((conversation, token) => { imports++; return Task.FromResult(true); }, CancellationToken.None);
++            Assert.That(imports, Is.Zero);
++            Directory.Delete(blocked);
++            if (manualRequest) {
++                await local.RequestSyncAsync("codex", CancellationToken.None);
++                await local.RunAsync((conversation, token) => { imports++; return Task.FromResult(true); }, CancellationToken.None);
++                Assert.That(imports, Is.EqualTo(1));
++            }
++        }
 +
 +        [TestCase("codex")]
 +        [TestCase("claude-code")]
@@ -2021,9 +2235,11 @@ index 000000000..4c2c8f2ef
 +            }
 +        }
 +
-+        [TestCase(false)]
-+        [TestCase(true)]
-+        public async Task SuspensionOrConsentRevocationRejectsLateCredentialCompletion(bool revokeConsent)
++        [TestCase(false, false)]
++        [TestCase(false, true)]
++        [TestCase(true, false)]
++        [TestCase(true, true)]
++        public async Task SuspensionOrConsentRevocationRejectsLateCredentialCompletion(bool revokeConsent, bool fault)
 +        {
 +            var secrets = new Secrets { Pending = new TaskCompletionSource<ChatV2ExternalMemorySecretLoadResult>(
 +                TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -2034,10 +2250,13 @@ index 000000000..4c2c8f2ef
 +                Assert.That(await Task.WhenAny(secrets.LoadStarted.Task, Task.Delay(5000)), Is.SameAs(secrets.LoadStarted.Task));
 +                if (revokeConsent) service.Tick(false);
 +                else service.Suspend();
-+                secrets.Pending.SetResult(new ChatV2ExternalMemorySecretLoadResult(true, secrets.Secret));
++                string status = service.StatusText;
++                if (fault) secrets.Pending.SetException(new IOException("Delayed credential failure."));
++                else secrets.Pending.SetResult(new ChatV2ExternalMemorySecretLoadResult(true, secrets.Secret));
 +                await enabling;
 +                Assert.That(service.Ready, Is.False);
 +                Assert.That(service.GetConnectionCode(), Is.Empty);
++                Assert.That(service.StatusText, Is.EqualTo(status));
 +            }
 +        }
 +    }
@@ -2092,10 +2311,10 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..a4e1cc43b
+index 000000000..88e2de7d4
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,138 @@
 +# OpenChatLink live conversation sync
 +
 +OpenChatLink imports personal ChatGPT and Claude web chats through Chrome, and
@@ -2152,6 +2371,11 @@ index 000000000..a4e1cc43b
 +Core write guards and provider-dispatch guards protect originals. Whole-chat
 +rename, pinning, and deletion remain available. Deleted originals stay deleted;
 +unexpected local modifications cause conflicts instead of overwrite.
++Ownership and the pending snapshot hash are saved before history changes. A
++failed final registry save can be retried after restart without changing the
++original's home or source title. Local-copy source labels are saved before the
++copy becomes writable. Synced originals reject messaging routes and incoming
++Discord/Telegram writes; local copies can use these routes.
 +
 +## Local files and limits
 +
@@ -2174,6 +2398,10 @@ index 000000000..a4e1cc43b
 +persist through restart and continue in bounded passes. A failed manual pass
 +requires Sync now again; automatic sources retry on later polls. The app reports
 +read failures and size limits without paths or message content.
++Failed files do not block other selected chats. Every bounded pass makes an
++attempt before yielding, and failed snapshots cannot starve older chats.
++Incomplete title headers refresh when the first visible user message arrives.
++Failed settings writes restore the prior choices and queued work.
 +
 +## Ownership and receiver
 +
@@ -2185,6 +2413,10 @@ index 000000000..a4e1cc43b
 +by Tick on Unity's thread; unchanged snapshots do not reload visible history.
 +Disconnect in the extension pauses local collection. Disabling sync or revoking
 +history consent in Phase Pal cancels both receiver and reader work.
++If Phase Pal is unavailable during Disconnect, the extension still clears browser
++pairing and alarms. It reports that local collection could not be paused and asks
++the user to disable external sync in Phase Pal. Open-chat updates wait for pending
++attachments to clear and are discarded after navigation or host replacement.
 +
 +- IPv4 loopback only: `127.0.0.1:41771`, protocol `openchatlink/1`.
 +- Health, ingestion, and local catalog/preferences/sync/pause routes require the
@@ -2206,28 +2438,21 @@ index 000000000..a4e1cc43b
 +
 +## Verification
 +
-+32 managed cases passed with production history stores, the HTTP receiver, and
-+synthetic local JSONL files. They cover provider identity/navigation, selected-only
-+body reads, incremental updates with a partial last record, independent copies,
-+all/100/date limits, queued manual restart, authenticated local routes, rejected
-+path input, host suspension, and history consent. 27 Node cases cover both web
-+collectors and separate source controls, including Claude organization/branch
-+isolation, bounded continuation, and failed-detail retry.
++Two agent review rounds covered the app store, receiver, local reader, extension,
++source badges, and host integration. Fixes passed 54 managed behavior cases and
++34 Node cases. The offline Python fallback passed its existing 25 cases.
++New regressions cover failed registry and preference saves, pending ownership
++recovery, malformed local records, failed-chat continuation, first-message titles,
++late credential failures, offline disconnect, slow catalog pages, and edits during
++a long browser import. Live web and packaged-player checks remain separate.
 +
-+Core, Runtime, Toolkit, and Platform compiled initially using available Unity
-+reference assemblies. Core, Runtime, and Platform were recompiled after initial reader
-+changes. The final receiver/reader components compiled directly in the managed
-+harness when concurrent localization changes outpaced cached Unity references.
-+A full current-worktree compile still needs refreshed references. No Unity process was
-+launched and no personal conversations were accessed. These managed checks do
-+not prove live web endpoints, Editor rendering, or packaged-player behavior.
-+The offline Python fallback remains a separate ChatGPT-only flow.
-+
-+The source-badge update compiled in the existing Unity Editor and passed eight
-+detached UI-tree checks with the real UXML/USS assets. The checks cover all four
-+sources, native chats, local-copy labels, cached-row updates, and rebinding cleanup.
-+No new Editor, Play Mode, build, or Test Runner was started. Player layout QA
-+remains separate.
++The current worktree compiled in the user's existing Unity Editor with no console
++errors. Direct fixture calls passed 21 cases: the complete projection fixture,
++deferred host refresh, and detached source-badge UI trees using actual UXML/USS.
++These calls did not start Test Runner or Play Mode. No new Unity process or build
++was started and no personal conversations were accessed. OS credential stores on
++each platform, live web endpoints, and packaged-player layout remain separate
++checks. The offline Python fallback remains a separate ChatGPT-only flow.
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs
 index e73fa7b00..f48b1b2c5 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2SettingsPanelPresenter.cs	
@@ -2245,10 +2470,10 @@ index e73fa7b00..f48b1b2c5 100644
 
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LocalConversationSync.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LocalConversationSync.cs
 new file mode 100644
-index 000000000..a3de89b44
+index 000000000..719ba0a6a
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LocalConversationSync.cs
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,392 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2LocalConversationSync.cs
 +using System;
 +using System.Collections.Generic;
@@ -2273,6 +2498,7 @@ index 000000000..a3de89b44
 +        private readonly string _settingsPath;
 +        private readonly SemaphoreSlim _writer = new SemaphoreSlim(1, 1);
 +        private readonly Dictionary<string, string> _completed = new Dictionary<string, string>();
++        private readonly Dictionary<string, string> _attempted = new Dictionary<string, string>();
 +        private readonly ConcurrentDictionary<string, SourceFile> _headers = new ConcurrentDictionary<string, SourceFile>();
 +        private JObject _profiles = new JObject();
 +        private JObject _accounts = new JObject();
@@ -2285,6 +2511,7 @@ index 000000000..a3de89b44
 +        {
 +            public string Path, Id, Title;
 +            public long Modified, Length, Created;
++            public bool HasTitle;
 +        }
 +
 +        public ChatV2LocalConversationSync(string persistentDataPath, Dictionary<string, string> roots = null)
@@ -2340,6 +2567,22 @@ index 000000000..a3de89b44
 +            else File.Move(_settingsPath + ".tmp", _settingsPath);
 +        }
 +
++        private void PersistChoices(Action change)
++        {
++            var profiles = (JObject)_profiles.DeepClone();
++            var accounts = (JObject)_accounts.DeepClone();
++            var pending = new HashSet<string>(_pending);
++            var completed = new Dictionary<string, string>(_completed);
++            var attempted = new Dictionary<string, string>(_attempted);
++            try { change(); Save(); }
++            catch {
++                _profiles = profiles; _accounts = accounts; _pending = pending;
++                _completed.Clear(); foreach (var entry in completed) _completed[entry.Key] = entry.Value;
++                _attempted.Clear(); foreach (var entry in attempted) _attempted[entry.Key] = entry.Value;
++                throw;
++            }
++        }
++
 +        private void Validate(string source, JObject profile)
 +        {
 +            Root(source);
@@ -2364,7 +2607,13 @@ index 000000000..a3de89b44
 +            Validate(source, profile);
 +            Interlocked.Increment(ref _revision);
 +            await _writer.WaitAsync(token).ConfigureAwait(false);
-+            try { Load(); _profiles[source] = profile.DeepClone(); _accounts[source] = Account(source); _pending.Remove(source); Save(); }
++            try {
++                Load();
++                PersistChoices(() => {
++                    _profiles[source] = profile.DeepClone(); _accounts[source] = Account(source);
++                    _pending.Remove(source); ClearAttempts(source);
++                });
++            }
 +            finally { _writer.Release(); }
 +        }
 +
@@ -2378,8 +2627,10 @@ index 000000000..a3de89b44
 +                JObject profile = _profiles[source] as JObject;
 +                if (profile == null || (string)_accounts[source] != Account(source) || ((string)profile["chats"] == "selected" && ((JArray)profile["selected"]).Count == 0))
 +                    throw new InvalidDataException("Choose chats before syncing.");
-+                foreach (string key in _completed.Keys.Where(key => key.StartsWith(source + ":", StringComparison.Ordinal)).ToArray()) _completed.Remove(key);
-+                _pending.Add(source); Save();
++                PersistChoices(() => {
++                    foreach (string key in _completed.Keys.Where(key => key.StartsWith(source + ":", StringComparison.Ordinal)).ToArray()) _completed.Remove(key);
++                    ClearAttempts(source); _pending.Add(source);
++                });
 +            }
 +            finally { _writer.Release(); }
 +        }
@@ -2391,8 +2642,10 @@ index 000000000..a3de89b44
 +            await _writer.WaitAsync(token).ConfigureAwait(false);
 +            try {
 +                Load();
-+                foreach (JProperty profile in _profiles.Properties()) ((JObject)profile.Value)["schedule"] = "manual";
-+                _pending.Clear(); Save();
++                PersistChoices(() => {
++                    foreach (JProperty profile in _profiles.Properties()) ((JObject)profile.Value)["schedule"] = "manual";
++                    _pending.Clear(); _attempted.Clear();
++                });
 +            }
 +            finally { _writer.Release(); }
 +        }
@@ -2416,6 +2669,12 @@ index 000000000..a3de89b44
 +                if (File.Exists(current) || Directory.Exists(current))
 +                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
 +            return false;
++        }
++
++        private void ClearAttempts(string source)
++        {
++            foreach (string key in _attempted.Keys.Where(key => key.StartsWith(source + ":", StringComparison.Ordinal)).ToArray())
++                _attempted.Remove(key);
 +        }
 +
 +        private List<SourceFile> Scan(string source, CancellationToken token, out int failures)
@@ -2451,16 +2710,20 @@ index 000000000..a3de89b44
 +                            if (IsLinked(path)) continue;
 +                            var info = new FileInfo(path);
 +                            if (info.Length > MAX_FILE_BYTES) { failures++; continue; }
-+                            if (!_headers.TryGetValue(path, out SourceFile cached) || cached.Created != info.CreationTimeUtc.Ticks) {
++                            long modified = info.LastWriteTimeUtc.Ticks;
++                            if (!_headers.TryGetValue(path, out SourceFile cached) || cached.Created != info.CreationTimeUtc.Ticks ||
++                                (!cached.HasTitle && (cached.Modified != modified || cached.Length != info.Length))) {
 +                                JObject header = Read(source, path, true, token);
 +                                if (!Guid.TryParse((string)header?["id"], out Guid parsed)) continue;
-+                                cached = new SourceFile { Id = parsed.ToString("D"), Title = (string)header["title"], Created = info.CreationTimeUtc.Ticks };
++                                cached = new SourceFile { Id = parsed.ToString("D"), Title = (string)header["title"], HasTitle = (bool)header["hasTitle"],
++                                    Created = info.CreationTimeUtc.Ticks, Modified = modified, Length = info.Length };
 +                                _headers[path] = cached;
 +                            }
 +                            var file = new SourceFile { Path = path, Id = cached.Id, Title = cached.Title,
 +                                Modified = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(), Length = info.Length };
 +                            if (!files.TryGetValue(file.Id, out SourceFile old) || old.Modified < file.Modified) files[file.Id] = file;
 +                        } catch (IOException) { failures++; } catch (JsonException) { failures++; }
++                        catch (UnauthorizedAccessException) { failures++; }
 +                    }
 +                } catch (UnauthorizedAccessException) { failures++; } catch (IOException) { failures++; }
 +            }
@@ -2489,6 +2752,14 @@ index 000000000..a3de89b44
 +            || text.StartsWith("<environment_context>", StringComparison.Ordinal) || text.StartsWith("<permissions instructions>", StringComparison.Ordinal);
 +
 +        private static JObject Read(string source, string path, bool headerOnly, CancellationToken token)
++        {
++            try { return ReadRecords(source, path, headerOnly, token); }
++            catch (Exception error) when (error is InvalidOperationException || error is InvalidCastException ||
++                error is FormatException || error is ArgumentException || error is OverflowException)
++            { throw new IOException("Invalid local conversation record.", error); }
++        }
++
++        private static JObject ReadRecords(string source, string path, bool headerOnly, CancellationToken token)
 +        {
 +            string id = source == "claude-code" ? Path.GetFileNameWithoutExtension(path) : null;
 +            string title = null;
@@ -2537,7 +2808,7 @@ index 000000000..a3de89b44
 +                }
 +            }
 +            if (Guid.TryParse(id, out Guid normalized)) id = normalized.ToString("D");
-+            return new JObject { ["id"] = id, ["title"] = title ?? ChatV2ExternalConversationStore.SourceName(source) + " conversation", ["messages"] = new JArray(messages) };
++            return new JObject { ["id"] = id, ["title"] = title ?? ChatV2ExternalConversationStore.SourceName(source) + " conversation", ["hasTitle"] = title != null, ["messages"] = new JArray(messages) };
 +        }
 +
 +        /// <summary>Runs one bounded pass for automatic or explicitly queued sources.</summary>
@@ -2563,7 +2834,9 @@ index 000000000..a3de89b44
 +                        string key = source + ":" + file.Id;
 +                        string stamp = file.Modified + ":" + file.Length + ":" + profile.ToString(Formatting.None);
 +                        if (_completed.TryGetValue(key, out string done) && done == stamp) continue;
-+                        if (processed >= 50 || watch.Elapsed.TotalSeconds >= 20) { more = true; break; }
++                        if (_attempted.TryGetValue(key, out string attempted) && attempted == stamp) continue;
++                        if (processed >= 50 || (processed > 0 && watch.Elapsed.TotalSeconds >= 20)) { more = true; break; }
++                        processed++; _attempted[key] = stamp;
 +                        try {
 +                            if (IsLinked(file.Path)) continue;
 +                            JObject conversation = Read(source, file.Path, false, token);
@@ -2579,10 +2852,12 @@ index 000000000..a3de89b44
 +                            if (revision != _revision) return totalFailures;
 +                            if (await import(conversation, token).ConfigureAwait(false)) _completed[key] = stamp;
 +                            else failures++;
-+                            processed++;
-+                        } catch (IOException) { failures++; } catch (JsonException) { failures++; }
++                        } catch (OperationCanceledException) { _attempted.Remove(key); throw; }
++                        catch (Exception error) when (error is IOException || error is JsonException || error is UnauthorizedAccessException ||
++                            error is ArgumentException || error is OverflowException || error is InvalidCastException) { failures++; }
 +                    }
-+                    if (!more && _pending.Remove(source)) Save();
++                    if (!more) ClearAttempts(source);
++                    if (!more && _pending.Contains(source)) PersistChoices(() => _pending.Remove(source));
 +                    totalFailures += failures;
 +                }
 +                return totalFailures;
@@ -2591,7 +2866,6 @@ index 000000000..a3de89b44
 +        }
 +    }
 +}
-
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
 index 47f5ca399..1375640ca 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2HistoryPresenter.cs
@@ -2866,3 +3140,227 @@ index 551dcc53e..30af5b7d6 100644
          [Test]
          public void ComposerTextHistory_UndoRedoRestoresDraftSnapshots()
          {
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalActivationBridge.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalActivationBridge.cs
+index 6055d38e2..85f011041 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalActivationBridge.cs
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalActivationBridge.cs
+@@ -845,6 +845,8 @@ namespace PhasePal.Services.ChatV2.Platform
+             {
+                 safeSessionId = _history.ResolveLegacySessionId(safeCharacterId, safeSessionId, reserveNew: true);
+             }
++            // A protected source transcript must reject both saved and visible projection writes.
++            if (_history.CanWriteSession?.Invoke(safeSessionId) == false) return false;
+             string safeChannel = string.IsNullOrWhiteSpace(channel) ? "messaging" : channel.Trim();
+             string safeTurnId = string.IsNullOrWhiteSpace(turnId) ? Guid.NewGuid().ToString("N") : turnId.Trim();
+             var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ShellEventHandlerFactory.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ShellEventHandlerFactory.cs
+index 6abce2830..7a68225cf 100644
+--- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ShellEventHandlerFactory.cs
++++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ShellEventHandlerFactory.cs
+@@ -910,6 +910,7 @@ namespace PhasePal.Services.ChatV2.Platform
+         private void OnHistorySessionTelegramRouteRequested(string sessionId)
+         {
+             _deps.PlayClickSound();
++            if (!CanRouteToSession(sessionId)) return;
+             string characterId = _deps.History?.VisibleCharacterId ?? string.Empty;
+             IReadOnlyList<ChatV2Message> messages = _deps.History?.LoadSessionMessages(
+                 characterId,
+@@ -943,6 +944,7 @@ namespace PhasePal.Services.ChatV2.Platform
+         private void OnHistorySessionDiscordRouteRequested(string sessionId)
+         {
+             _deps.PlayClickSound();
++            if (!CanRouteToSession(sessionId)) return;
+             string characterId = _deps.History?.VisibleCharacterId ?? string.Empty;
+             IReadOnlyList<ChatV2Message> messages = _deps.History?.LoadSessionMessages(
+                 characterId,
+@@ -973,6 +975,15 @@ namespace PhasePal.Services.ChatV2.Platform
+             _deps.QueueViewStateRefresh?.Invoke();
+         }
+
++        private bool CanRouteToSession(string sessionId)
++        {
++            if (_deps.History?.CanWriteSession?.Invoke(sessionId?.Trim()) != false) return true;
++            _deps.Status?.Show(
++                "This is a synced original. Select Continue in Phase Pal before using it for messaging.",
++                ChatV2StatusSeverity.Warning, ChatV2StatusLifetime.Temporary, "external-conversation");
++            return false;
++        }
++
+         private void OnHistorySessionOrderChanged(IReadOnlyList<string> sessionIds)
+         {
+             _deps.PlayClickSound();
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationProjectionServiceTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationProjectionServiceTests.cs
+index 83f13362a..0d5e68fb4 100644
+--- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationProjectionServiceTests.cs
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationProjectionServiceTests.cs
+@@ -3,9 +3,11 @@
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
++using System.Reflection;
+ using NUnit.Framework;
+ using PhasePal.Services.ChatV2.Core;
+ using PhasePal.Services.ChatV2.Platform;
++using PhasePal.Services.Messaging.Core;
+
+ namespace PhasePal.Tests.ChatV2.EditMode
+ {
+@@ -22,6 +24,75 @@ namespace PhasePal.Tests.ChatV2.EditMode
+             return root;
+         }
+
++        [TestCase(false, true)]
++        [TestCase(true, true)]
++        [TestCase(false, false)]
++        [TestCase(true, false)]
++        public void ExternalConversationProjection_ReadOnlyOriginalRejectsAndWritableCopyAllows(bool canonical, bool readOnly)
++        {
++            string root = CreateHistoryRoot();
++            try
++            {
++                IChatV2HistoryStore store = canonical
++                    ? new ChatV2GlobalHistoryStore(root)
++                    : new ChatV2FileHistoryStore(root, "session");
++                var history = new ChatV2SessionHistoryService(store, () => "pal-1", globalIdentity: canonical);
++                history.StartNewSession("session");
++                history.Append(new ChatV2Message(ChatV2MessageId.Create("source-message"), ChatV2MessageRole.User, "Original"));
++                history.CanWriteSession = id => !readOnly;
++                var messages = new ChatV2MessageStore();
++                int refreshes = 0, changes = 0;
++                var projection = new ChatV2ExternalConversationProjectionService(history, messages,
++                    () => true, () => refreshes++, () => changes++);
++
++                bool appended = projection.Append("session", "pal-1", "discord", "turn", "Remote question",
++                    "Remote answer", isCanonicalSession: canonical);
++
++                Assert.That(appended, Is.EqualTo(!readOnly));
++                Assert.That(store.LoadPage("pal-1", "session", 10).Count, Is.EqualTo(readOnly ? 1 : 3));
++                Assert.That(history.Current.MessageCount, Is.EqualTo(readOnly ? 1 : 3));
++                Assert.That(messages.Messages.Count, Is.EqualTo(readOnly ? 0 : 2));
++                Assert.That(refreshes, Is.EqualTo(readOnly ? 0 : 1));
++                Assert.That(changes, Is.EqualTo(readOnly ? 0 : 1));
++            }
++            finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
++        }
++
++        [TestCase("telegram")]
++        [TestCase("discord")]
++        public void ExternalConversationRouting_ReadOnlyOriginalRejectsBeforeSavingRoute(string channel)
++        {
++            var history = new ChatV2SessionHistoryService(characterIdResolver: () => "pal-1");
++            history.CanWriteSession = id => id != "original";
++            var routes = new RecordingRoutes();
++            var status = new ChatV2StatusService();
++            var factory = new ChatV2ShellEventHandlerFactory(new ChatV2ShellEventHandlerDependencies
++            {
++                History = history, MessagingSessionRoutes = routes, Status = status, PlayClickSound = () => { }
++            });
++
++            string handler = channel == "telegram" ? "OnHistorySessionTelegramRouteRequested" : "OnHistorySessionDiscordRouteRequested";
++            typeof(ChatV2ShellEventHandlerFactory).GetMethod(handler, BindingFlags.Instance | BindingFlags.NonPublic)
++                .Invoke(factory, new object[] { " original " });
++
++            Assert.That(routes.Calls, Is.Zero);
++            Assert.That(status.Current.Severity, Is.EqualTo(ChatV2StatusSeverity.Warning));
++            Assert.That(status.Current.Source, Is.EqualTo("external-conversation"));
++        }
++
++        private sealed class RecordingRoutes : ILocalMessagingSessionRouteService
++        {
++            public int Calls;
++            public bool TryRouteTelegramToSession(string characterId, string sessionId, IReadOnlyList<ChatV2Message> messages, out string status)
++            { Calls++; status = "routed"; return true; }
++            public bool TryRouteDiscordToSession(string characterId, string sessionId, IReadOnlyList<ChatV2Message> messages, out string status)
++            { Calls++; status = "routed"; return true; }
++            public string GetTelegramTargetSessionId(string characterId) => null;
++            public string GetDiscordTargetSessionId(string characterId) => null;
++            public void ClearTelegramRouteToSession(string characterId, string sessionId) { }
++            public void ClearDiscordRouteToSession(string characterId, string sessionId) { }
++        }
++
+         [Test]
+         public void ExternalConversationProjection_CurrentDiscordSession_ProjectsBothMessages()
+         {
+diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeHostTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeHostTests.cs
+index 64d368df7..31bff0c83 100644
+--- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeHostTests.cs
++++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeHostTests.cs
+@@ -1,6 +1,8 @@
+ // #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2RuntimeHostTests.cs
+ #if UNITY_EDITOR
++using System;
+ using System.Collections.Generic;
++using System.IO;
+ using System.Reflection;
+ using System.Threading;
+ using System.Threading.Tasks;
+@@ -16,11 +18,69 @@ using PhasePal.Services.DependencyInjection;
+ using PhasePal.Services.Platform.Core;
+ using PhasePal.Services.PromptLocalization.Core;
+ using UnityEngine;
++using Object = UnityEngine.Object;
+
+ namespace PhasePal.Tests.ChatV2.EditMode
+ {
+     public sealed class ChatV2RuntimeHostTests
+     {
++        [TestCase(false)]
++        [TestCase(true)]
++        public void ExternalConversationRefresh_WaitsForAttachmentsAndDiscardsStaleSelection(bool changeSelection)
++        {
++            string root = Path.Combine(Path.GetTempPath(), "phasepal-external-refresh-" + Guid.NewGuid().ToString("N"));
++            if (Application.platform == RuntimePlatform.OSXEditor && root.StartsWith("/var/", StringComparison.Ordinal)) root = "/private" + root;
++            var gameObject = new GameObject("External conversation refresh test");
++            gameObject.SetActive(false);
++            ChatV2ExternalConversationService external = null;
++            try
++            {
++                var host = gameObject.AddComponent<ChatV2RuntimeHostController>();
++                var store = new ChatV2FileHistoryStore(root, "original");
++                var history = new ChatV2SessionHistoryService(store, () => "pal-1", globalIdentity: false);
++                history.StartNewSession("original");
++                history.Append(new ChatV2Message(ChatV2MessageId.Create("first"), ChatV2MessageRole.User, "First"));
++                // The sync worker saved this update after the current transcript was loaded.
++                store.SaveMessage("pal-1", "original", new ChatV2Message(ChatV2MessageId.Create("new"), ChatV2MessageRole.Assistant, "New reply"));
++                var attachments = new ChatV2AttachmentStateService();
++                attachments.SetPending(ChatV2AttachmentKind.Image, "data:image/png;base64,AQID");
++                var messages = new ChatV2MessageStore();
++                int refreshes = 0;
++                var coordinator = new ChatV2HistoryCoordinator(history, messages, attachments, new ChatV2StatusService(),
++                    () => null, _ => { }, () => { }, () => { }, () => refreshes++);
++                external = new ChatV2ExternalConversationService(store, root,
++                    local: new ChatV2LocalConversationSync(root, new Dictionary<string, string>()));
++                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
++                var type = typeof(ChatV2RuntimeHostController);
++                type.GetField("_history", flags).SetValue(host, history);
++                type.GetField("_attachments", flags).SetValue(host, attachments);
++                type.GetField("_historyCoordinator", flags).SetValue(host, coordinator);
++                type.GetField("_externalConversations", flags).SetValue(host, external);
++                var pending = type.GetField("_pendingExternalConversationRefresh", flags);
++                pending.SetValue(host, "original");
++                var tick = type.GetMethod("TickExternalConversations", flags);
++
++                tick.Invoke(host, null);
++                Assert.That(refreshes, Is.Zero);
++                Assert.That(pending.GetValue(host), Is.EqualTo("original"));
++                if (changeSelection) history.StartNewSession("other");
++                attachments.Clear();
++                // No new source update is queued in this tick.
++                tick.Invoke(host, null);
++
++                Assert.That(refreshes, Is.EqualTo(changeSelection ? 0 : 1));
++                Assert.That(pending.GetValue(host), Is.Null);
++                Assert.That(messages.Messages.Count, Is.EqualTo(changeSelection ? 0 : 2));
++                Assert.That(history.Current.SessionId, Is.EqualTo(changeSelection ? "other" : "original"));
++            }
++            finally
++            {
++                Object.DestroyImmediate(gameObject);
++                external?.Dispose();
++                if (Directory.Exists(root)) Directory.Delete(root, true);
++            }
++        }
++
+         [TestCase(false)]
+         [TestCase(true)]
+         public void CurrentVisibleRequest_UsesSessionIdentityForSharedHistory(bool globalIdentity)

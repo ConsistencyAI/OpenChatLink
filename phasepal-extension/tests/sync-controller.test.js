@@ -116,3 +116,18 @@ test('local source controls use the authenticated app and disconnect pauses loca
   assert.equal(calls[0].init.credentials, 'omit'); assert.equal(calls[0].init.headers.Authorization, 'Bearer ' + pairing.token);
   assert.equal(api.state.code, undefined); assert.equal(api.state['preferences:codex'].chats, 'all');
 });
+
+for (const failure of ['offline', 'revoked']) test(`disconnect clears browser pairing and alarms when the app is ${failure}`, async () => {
+  const api = fakeApi({code, 'preferences:chatgpt': {chats: 'all', schedule: 'auto'},
+    'preferences:claude': {chats: 'all', schedule: 'auto'}});
+  const controller = createSourceController({...api, alarms: api.alarmsApi}, {fetcher: async () => {
+    if (failure === 'offline') throw new Error('offline');
+    return {ok: false, status: 401};
+  }, collectors: {chatgpt: async () => assert.fail('sync after disconnect'), claude: async () => assert.fail('sync after disconnect')}});
+  await controller.ready;
+  assert.equal(api.alarms.size, 2);
+  await assert.rejects(controller.disconnect(), /Browser disconnected.*Local sync could not be paused/);
+  assert.equal(api.state.code, undefined); assert.equal(api.alarms.size, 0);
+  await controller.alarm(ALARM + ':chatgpt'); await controller.alarm(ALARM + ':claude');
+  assert.match(api.state['status:codex'].message, /Disable External Conversations/);
+});
