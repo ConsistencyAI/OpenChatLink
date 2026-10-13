@@ -21,6 +21,8 @@ permissions:
 
 jobs:
   build:
+    # Retained upstream workflow; OpenChatLink releases need their own process.
+    if: github.repository == 'byteowlz/hstry'
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:

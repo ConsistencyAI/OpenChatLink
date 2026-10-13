@@ -41,6 +41,12 @@ The retained hstry CLI, TUI, MCP, API, database, and original `extension/` folde
 have their own [upstream guide](docs/UPSTREAM_HSTRY.md). The Phase Pal live-sync
 extension is in `phasepal-extension/`.
 
+## Contributing and security
+
+Read the [contribution guide](CONTRIBUTING.md) and
+[community rules](CODE_OF_CONDUCT.md) before opening a pull request.
+Report vulnerabilities privately using the [security policy](SECURITY.md).
+
 ## Attribution and license
 
 OpenChatLink is based on [hstry](https://github.com/byteowlz/hstry). Its source and
