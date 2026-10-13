@@ -60,10 +60,10 @@ index 23b7f734c..d7e09efa8 100644
              {
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs
 new file mode 100644
-index 000000000..76f10e556
+index 000000000..c10753a1b
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs	
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,52 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Core/IChatV2ExternalConversations.cs
 +using System;
 +using System.Collections.Generic;
@@ -84,8 +84,6 @@ index 000000000..76f10e556
 +    public interface IChatV2ExternalSyncFeedback
 +    {
 +        bool IsSyncing { get; }
-+        bool ManualSyncSound { get; }
-+        Task SetManualSyncSoundAsync(bool enabled);
 +        IReadOnlyList<ChatV2ExternalSyncNotice> TakeSyncNotices();
 +    }
 +
@@ -339,10 +337,10 @@ index 000000000..8f795260b
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 new file mode 100644
-index 000000000..91567d54d
+index 000000000..48015547e
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs	
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,344 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2ExternalConversationService.cs
 +using System;
 +using System.Collections.Concurrent;
@@ -385,7 +383,6 @@ index 000000000..91567d54d
 +        private readonly Dictionary<string, SyncRun> _syncRuns = new Dictionary<string, SyncRun>();
 +        private readonly HashSet<string> _failedSources = new HashSet<string>();
 +        private readonly Queue<ChatV2ExternalSyncNotice> _syncNotices = new Queue<ChatV2ExternalSyncNotice>();
-+        private volatile bool _manualSyncSound;
 +        private sealed class SyncRun
 +        {
 +            public string Id;
@@ -394,26 +391,6 @@ index 000000000..91567d54d
 +            public DateTime Deadline;
 +        }
 +        public bool IsSyncing { get { lock (_syncGate) return _syncRuns.Count > 0; } }
-+        public bool ManualSyncSound => _manualSyncSound;
-+
-+        /// <summary>Saves the manual-sync sound preference in the current local data scope.</summary>
-+        public async Task SetManualSyncSoundAsync(bool enabled)
-+        {
-+            await _settingsWriter.WaitAsync(_hostLifetime.Token);
-+            try {
-+                await Task.Run(() => {
-+                    Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath));
-+                    JObject settings = File.Exists(_settingsPath) ? JObject.Parse(File.ReadAllText(_settingsPath))
-+                        : new JObject { ["schema"] = 1, ["enabled"] = _enabled };
-+                    settings["manualSyncSound"] = enabled;
-+                    File.WriteAllText(_settingsPath + ".tmp", settings.ToString(Formatting.None));
-+                    if (File.Exists(_settingsPath)) File.Replace(_settingsPath + ".tmp", _settingsPath, null);
-+                    else File.Move(_settingsPath + ".tmp", _settingsPath);
-+                }, _hostLifetime.Token);
-+                _manualSyncSound = enabled; MarkChanged();
-+            } finally { _settingsWriter.Release(); }
-+        }
-+
 +        /// <summary>Consumes completed feedback on the host thread.</summary>
 +        public IReadOnlyList<ChatV2ExternalSyncNotice> TakeSyncNotices()
 +        {
@@ -497,7 +474,6 @@ index 000000000..91567d54d
 +                if (saved != null && (int?)saved["schema"] != 1) throw new InvalidDataException();
 +                bool enabled = (bool?)saved?["enabled"] ?? false;
 +                _enabled = enabled;
-+                _manualSyncSound = (bool?)saved?["manualSyncSound"] ?? false;
 +                _characterId = (string)saved?["characterId"];
 +                _characterName = (string)saved?["characterName"];
 +                if (enabled && !historyConsent)
@@ -529,7 +505,7 @@ index 000000000..91567d54d
 +                    Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath));
 +                    string temporary = _settingsPath + ".tmp";
 +                    File.WriteAllText(temporary, JsonConvert.SerializeObject(new {
-+                        schema = 1, enabled, characterId, characterName = _characterName, manualSyncSound = _manualSyncSound }));
++                        schema = 1, enabled, characterId, characterName = _characterName }));
 +                    if (File.Exists(_settingsPath)) File.Replace(temporary, _settingsPath, null);
 +                    else File.Move(temporary, _settingsPath);
 +                });
@@ -1168,7 +1144,7 @@ index 7c00eeaa2..e3f21c3d8 100644
          public ChatV2RuntimeAvailabilityStore RuntimeAvailability { get; set; }
          public ChatV2PlayerPrefsSettingsFacade Settings { get; set; }
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs
-index e54922854..188ddf296 100644
+index e54922854..da2b3ca8f 100644
 --- a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Platform/ChatV2RuntimeHostController.cs	
 @@ -147,6 +147,11 @@ namespace PhasePal.Services.ChatV2.Platform
@@ -1331,7 +1307,7 @@ index e54922854..188ddf296 100644
 +                _externalSyncStatusSource = "external-sync-" + Guid.NewGuid().ToString("N");
 +                _status?.Show(message, notice.Failures > 0 ? ChatV2StatusSeverity.Warning : ChatV2StatusSeverity.Success,
 +                    ChatV2StatusLifetime.Temporary, _externalSyncStatusSource, true);
-+                if (notice.Manual && notice.Failures == 0 && _externalConversations.ManualSyncSound && IsRuntimeActive())
++                if (notice.Manual && notice.Failures == 0 && IsRuntimeActive())
 +                    ResolveGameAudioManager()?.PlayChatMessageSound();
 +            }
 +            string currentSession = _history?.Current?.SessionId;
@@ -1414,10 +1390,10 @@ index 805db04dc..234353d67 100644
                  : safeRequest.RequestId.Trim();
 diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 new file mode 100644
-index 000000000..95a4267dc
+index 000000000..7ad3516e3
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs	
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,193 @@
 +// #Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2ExternalConversationPresenter.cs
 +using UnityEngine;
 +using UnityEngine.UIElements;
@@ -1439,7 +1415,6 @@ index 000000000..95a4267dc
 +        private string _headerOriginalTooltip;
 +        private VisualElement _syncIndicator;
 +        private IVisualElementScheduledItem _syncAnimation;
-+        private Toggle _syncSound;
 +        public bool IsBound => _boundRoot != null;
 +        private static string Text(string key, string fallback) => ChatV2Localization.Resolve(key, fallback);
 +        public void Bind(VisualElement root, IChatV2ExternalConversations service, Action<bool> toggle,
@@ -1508,24 +1483,6 @@ index 000000000..95a4267dc
 +            _copyCode.AddToClassList("chat-v2-settings-action-button");
 +            _copyCode.AddToClassList("chat-v2-external-copy-code");
 +            connectionActions.Add(_copyCode); connectionRow.Add(connectionActions); _group.Add(connectionRow);
-+            if (feedback != null) {
-+                var soundRow = new VisualElement(); soundRow.AddToClassList("chat-v2-settings-row");
-+                var soundCopy = new VisualElement(); soundCopy.AddToClassList("chat-v2-settings-row__copy");
-+                var soundTitle = new Label(Text("ChatV2_ExternalSync_Sound_Key", "Sound after manual sync"));
-+                soundTitle.AddToClassList("chat-v2-settings-row__title"); soundCopy.Add(soundTitle);
-+                var soundDescription = new Label(Text("ChatV2_ExternalSync_SoundDescription_Key", "Play a sound when a manual sync finishes. Automatic sync stays silent."));
-+                soundDescription.AddToClassList("chat-v2-settings-row__description"); soundCopy.Add(soundDescription); soundRow.Add(soundCopy);
-+                _syncSound = new Toggle(soundTitle.text) { name = "chat-v2-external-sync-sound" };
-+                _syncSound.AddToClassList("chat-v2-settings-toggle");
-+                _syncSound.RegisterValueChangedCallback(async evt => {
-+                    Toggle control = _syncSound; control.SetEnabled(false);
-+                    try { await feedback.SetManualSyncSoundAsync(evt.newValue); }
-+                    catch (Exception) { control.SetValueWithoutNotify(feedback.ManualSyncSound);
-+                        if (_syncSound == control && _status != null) _status.text = Text("ChatV2_ExternalSync_SoundSaveFailed_Key", "Could not save the sync sound setting. Try again."); }
-+                    finally { control.SetEnabled(true); }
-+                });
-+                soundRow.Add(_syncSound); _group.Add(soundRow);
-+            }
 +            var section = root.Q<VisualElement>("chat-v2-settings-section-general");
 +            if (section != null)
 +            {
@@ -1565,7 +1522,6 @@ index 000000000..95a4267dc
 +            _refreshHistoryOrigins?.Invoke();
 +            if (_service == null) return;
 +            if (_service is IChatV2ExternalSyncFeedback feedback) {
-+                _syncSound?.SetValueWithoutNotify(feedback.ManualSyncSound);
 +                if (_syncIndicator != null) {
 +                    _syncIndicator.style.display = feedback.IsSyncing ? DisplayStyle.Flex : DisplayStyle.None;
 +                    if (feedback.IsSyncing) _syncAnimation?.Resume(); else _syncAnimation?.Pause();
@@ -1588,7 +1544,7 @@ index 000000000..95a4267dc
 +        public void Dispose()
 +        {
 +            _syncAnimation?.Pause(); _syncAnimation = null;
-+            _syncIndicator?.RemoveFromHierarchy(); _syncIndicator = null; _syncSound = null;
++            _syncIndicator?.RemoveFromHierarchy(); _syncIndicator = null;
 +            if (_service != null) _service.Changed -= Refresh;
 +            _group?.RemoveFromHierarchy(); _banner?.RemoveFromHierarchy();
 +            _headerOrigin?.RemoveFromHierarchy();
@@ -1750,10 +1706,10 @@ diff --git a/Phase Pal/Assets/_PhasePal/Scripts/Services/ChatV2/Toolkit/ChatV2To
          public void ApplyPersonaUpdateConfirmation(ChatV2PersonaUpdateConfirmationModel model)
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 new file mode 100644
-index 000000000..e7114a559
+index 000000000..e5ac24ee4
 --- /dev/null
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs	
-@@ -0,0 +1,780 @@
+@@ -0,0 +1,767 @@
 +// #Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ExternalConversationTests.cs
 +using System;
 +using System.Collections.Generic;
@@ -2364,19 +2320,6 @@ index 000000000..e7114a559
 +        }
 +
 +        [Test]
-+        public async Task SyncSoundPreferenceDefaultsOffAndSurvivesReload()
-+        {
-+            using (var service = new ChatV2ExternalConversationService(_history, _root, new Secrets(), LocalSync("codex"))) {
-+                await service.ResumeAsync(true);
-+                Assert.That(service.ManualSyncSound, Is.False);
-+                await service.SetManualSyncSoundAsync(true);
-+            }
-+            using var restored = new ChatV2ExternalConversationService(_history, _root, new Secrets(), LocalSync("codex"));
-+            await restored.ResumeAsync(true);
-+            Assert.That(restored.ManualSyncSound, Is.True);
-+        }
-+
-+        [Test]
 +        public async Task AuthenticatedSyncLifecycleCountsChangedImportsOnce()
 +        {
 +            var secrets = new Secrets();
@@ -2584,7 +2527,7 @@ index 690d44319..62565a3a7 100644
  `IKeepAwakeService` is an installer-owned application service in Platform Core.
 diff --git a/Phase Pal/Docs/OpenChatLinkIntegration.md b/Phase Pal/Docs/OpenChatLinkIntegration.md
 new file mode 100644
-index 000000000..84d21995f
+index 000000000..66075b83a
 --- /dev/null
 +++ b/Phase Pal/Docs/OpenChatLinkIntegration.md	
 @@ -0,0 +1,160 @@
@@ -2620,9 +2563,9 @@ index 000000000..84d21995f
 +Phase Pal shows a small themed spinner beside the chat header's source badges
 +while a sync is active. Settings shows “Syncing external conversations…” too.
 +Manual sync shows the existing ChatV2 completion toast with the number of chats
-+actually changed. No-change runs report zero updates. Enable “Sound after manual
-+sync” in External Conversations to play the existing notification sound on a
-+successful manual completion; it defaults off and follows the app sound controls.
++actually changed. No-change runs report zero updates. Successful manual sync
++plays the existing notification sound through the app sound controls. There is
++no separate sync sound setting.
 +Automatic sync has no success toast or sound. A failure produces a warning toast;
 +repeated automatic failures for the same source are suppressed until recovery.
 +
@@ -3349,10 +3292,10 @@ index 821bec080..d829e5128 100644
 +    display: none;
 +}
 diff --git a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs
-index 551dcc53e..cfb0578fc 100644
+index 551dcc53e..0a01b3085 100644
 --- a/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
 +++ b/Phase Pal/Assets/_PhasePal/Tests/Services/ChatV2/EditMode/ChatV2ToolkitShellAssetTests.HistoryComposerTranscript.cs	
-@@ -441,6 +441,123 @@ namespace PhasePal.Tests.ChatV2.EditMode
+@@ -441,6 +441,117 @@ namespace PhasePal.Tests.ChatV2.EditMode
                  historyList.Query<Label>(className: "chat-v2-history-item__title").ToList().Select(label => label.text));
          }
  
@@ -3428,7 +3371,7 @@ index 551dcc53e..cfb0578fc 100644
 +        }
 +
 +        [Test]
-+        public void ExternalSyncSpinnerAndSoundSettingFollowServiceStateAndDispose()
++        public void ExternalSyncSpinnerFollowsServiceStateAndDispose()
 +        {
 +            var root = LoadToolkitShellUxmlRoot();
 +            var service = new OriginBadgeService();
@@ -3437,16 +3380,12 @@ index 551dcc53e..cfb0578fc 100644
 +            try {
 +                type.GetMethod("Bind").Invoke(external, new object[] { root, service, null, null, null, null });
 +                VisualElement progress = root.Q<VisualElement>("chat-v2-external-sync-progress");
-+                Toggle sound = root.Q<Toggle>("chat-v2-external-sync-sound");
++                Assert.That(root.Q<Toggle>("chat-v2-external-sync-sound"), Is.Null);
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.None));
-+                Assert.That(sound.value, Is.False);
-+                service.IsSyncing = true; service.ManualSyncSound = true; service.Notify();
++                service.IsSyncing = true; service.Notify();
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.Flex));
-+                Assert.That(sound.value, Is.True);
 +                service.IsSyncing = false; service.Notify();
 +                Assert.That(progress.style.display.value, Is.EqualTo(DisplayStyle.None));
-+                sound.value = false;
-+                Assert.That(service.ManualSyncSound, Is.False);
 +            } finally { external.Dispose(); }
 +            Assert.That(root.Q<VisualElement>("chat-v2-external-sync-progress"), Is.Null);
 +            Assert.That(service.Subscribers, Is.Zero);
@@ -3461,8 +3400,6 @@ index 551dcc53e..cfb0578fc 100644
 +            public bool Ready => false;
 +            public string StatusText => "Off";
 +            public bool IsSyncing { get; set; }
-+            public bool ManualSyncSound { get; set; }
-+            public Task SetManualSyncSoundAsync(bool enabled) { ManualSyncSound = enabled; return Task.CompletedTask; }
 +            public IReadOnlyList<ChatV2ExternalSyncNotice> TakeSyncNotices() => Array.Empty<ChatV2ExternalSyncNotice>();
 +            public string GetConnectionCode() => string.Empty;
 +            public ChatV2ExternalConversationInfo GetSessionInfo(string sessionId) => sessionId == "session" ? Info : null;
