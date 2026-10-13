@@ -20,9 +20,11 @@ function drawList() {
   el('chat-list').replaceChildren();
   const available = new Map(rows);
   for (const [key, row] of selected) if (!available.has(key)) available.set(key, {...row, title: row.title ?? `Saved selection: ${row.id}`});
+  let shown = 0;
   for (const [key, row] of available) {
     if (search && !row.title.toLocaleLowerCase().includes(search)) continue;
     const label = document.createElement('label'); label.className = 'chat-choice';
+    shown++;
     const input = document.createElement('input'); input.type = 'checkbox'; input.checked = selected.has(key);
     input.addEventListener('change', () => {
       if (input.checked) selected.set(key, {accountId: row.accountId, id: row.id, title: row.title}); else selected.delete(key);
@@ -31,12 +33,18 @@ function drawList() {
     const title = document.createElement('span'); title.textContent = row.title;
     label.append(input, title); el('chat-list').append(label);
   }
+  el('chat-empty').hidden = shown > 0;
+  el('chat-empty-title').textContent = search ? 'No matching conversations' : loaded ? 'No chats found' : 'Your chats will appear here';
+  el('chat-empty-description').textContent = search ? 'Try another title or clear your search.' : loaded ? 'Refresh the list or choose another source.' : 'Load your chat list, then select the conversations you want to sync.';
   el('more').hidden = !cursor;
 }
 async function renderStatus() {
   const data = await chrome.storage.local.get([`status:${source}`, 'code']);
   const status = data[`status:${source}`], code = data.code;
-  el('status').textContent = dirty ? 'You have unsaved sync options. Select Save sync options.' : status?.message ?? 'Not connected.';
+  el('connection-state').dataset.paired = String(Boolean(code));
+  el('connection-label').textContent = code ? 'Pairing saved' : 'Not paired';
+  el('status').textContent = dirty ? 'You have unsaved sync options. Select Save sync options.'
+    : status?.message ?? (code ? 'Pairing saved. Choose chats and save your sync options.' : 'Not connected.');
   el('sync').disabled = !code || Boolean(status?.running) || dirty || busy;
   el('full').disabled = el('sync').disabled;
   el('connect').disabled = busy;
@@ -55,9 +63,13 @@ async function act(work) {
   catch (error) {failure = error.message;}
   finally {busy = false; await renderStatus(); if (failure) el('status').textContent = failure;}
 }
-el('connect').addEventListener('click', () => act(async () => {
-  await request({type: 'connect', code: el('code').value.trim()}); el('code').value = '';
-}));
+el('connection-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (busy) return;
+  void act(async () => {
+    await request({type: 'connect', code: el('code').value.trim()}); el('code').value = '';
+  });
+});
 el('preferences').addEventListener('change', event => {
   if (['chats', 'history', 'schedule', 'since-date'].includes(event.target.id)) {
     dirty = true; visibility(); void renderStatus();

@@ -11,3 +11,11 @@ title discovery, selected-chat filtering, and filtering for visible text.
 The Phase Pal receiver and interface are separate first-party
 source in integrations/phasepal/phasepal-live-sync.patch; that patch is covered
 by integrations/phasepal/PHASEPAL_SOURCE_LICENSE.
+
+The locally bundled Montserrat Latin font in assets/montserrat-latin.woff2
+comes from the referenced Phase Pal website's next/font Google Fonts output.
+Copyright 2024 The Montserrat.Git Project Authors.
+Source: https://github.com/JulietaUla/Montserrat
+SIL Open Font License 1.1; see assets/Montserrat-OFL.txt.
+The Phase Pal logo in assets/phase-pal-logo.svg is the existing Phase Pal website
+brand asset, reused for this first-party integration at the owner's request.

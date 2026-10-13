@@ -1,40 +1,88 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenChatLink for Phase Pal</title><link rel="stylesheet" href="style.css"></head>
-<body><main>
-<h1>OpenChatLink → Phase Pal</h1>
-<p>Choose the conversations and history you want in Phase Pal.</p>
-<ol><li>In Phase Pal, open Chat Settings → General → External Conversations and enable sync.</li>
-<li>Copy the connection code and paste it below.</li><li>Choose a source. For web chats, sign in to <a href="https://chatgpt.com" target="_blank" rel="noreferrer">ChatGPT</a> or <a href="https://claude.ai" target="_blank" rel="noreferrer">Claude</a>.</li></ol>
-<label for="code">Phase Pal connection code</label>
-<input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="ocl1.…">
-<button id="connect">Connect</button>
-<label for="source">Conversation source</label>
-<select id="source"><option value="chatgpt">ChatGPT</option><option value="claude">Claude web</option><option value="codex">Codex desktop / CLI — local threads</option><option value="claude-code">Claude Code — local sessions</option></select>
-<p id="source-note"></p>
-<form id="preferences">
-<h2>Which chats</h2>
-<label for="chats">Conversations to sync</label>
-<select id="chats"><option value="selected">Only selected chats</option><option value="all">All personal ChatGPT chats</option></select>
-<section id="picker">
-<p>Load your chat titles, then select the conversations you want. Loading the list does not import messages.</p>
-<button id="load" type="button">Load / refresh chats</button>
-<label for="search">Search loaded chats</label><input id="search" type="search" placeholder="Conversation title">
-<p id="selection-count"></p><div id="chat-list" role="group" aria-label="Source conversations"></div>
-<p id="list-status" role="status"></p><button id="more" type="button" hidden>Load more chats</button>
-</section>
-<h2>How much history</h2>
-<label for="history">Messages to import</label>
-<select id="history"><option value="all">All history</option><option value="last100">Last 100 messages per chat</option><option value="since">Messages from a chosen date</option></select>
-<div id="date-row" hidden><label for="since-date">Include messages on or after this date (00:00 UTC)</label><input id="since-date" type="date" min="1970-01-01"></div>
-<h2>When to sync</h2>
-<label for="schedule">Sync schedule</label>
-<select id="schedule"><option value="auto">Automatically, every minute</option><option value="manual">Manually, when I select Sync now</option></select>
-<p>Save changes before syncing. Deselected chats stay in Phase Pal but stop receiving updates. Chats with no matching messages are skipped. Local copies keep their history.</p>
-<div class="actions"><button id="save" type="submit">Save sync options</button><button id="sync" type="button">Sync now</button></div>
-</form>
-<p id="status" role="status">Not connected.</p>
-<p class="note">Messages sent in Phase Pal stay there. They do not sync back to the source. Phase Pal keeps a local copy when you continue a synced chat.</p>
-<details><summary>Connection options</summary><div class="actions"><button id="full">Reimport chosen history</button><button id="disconnect">Disconnect</button></div></details>
-</main><script type="module" src="options.js"></script></body></html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenChatLink for Phase Pal</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="brand-bar">
+      <div class="brand"><img src="assets/phase-pal-logo.svg" width="36" height="36" alt=""><span>Phase Pal</span><span class="brand-divider" aria-hidden="true"></span><span class="product-name">OpenChatLink</span></div>
+      <span class="product-tag">Conversation sync</span>
+    </header>
+
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">A little closer to your companion</p>
+      <h1 id="page-title">Your chats,<br><span>now in Phase Pal.</span></h1>
+      <p class="intro-description">Choose your conversations, how much history to bring over, and when they sync.</p>
+      <div class="source-tags" aria-label="Supported sources"><span>ChatGPT</span><span>Claude</span><span>Codex</span><span>Claude Code</span></div>
+    </section>
+
+    <section class="card connection-card" aria-labelledby="connection-title">
+      <div class="card-heading">
+        <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 1 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg></span><div><h2 id="connection-title">Connect to Phase Pal</h2><p>Enable External Conversations in Phase Pal, then copy your connection code.</p></div></div>
+        <span id="connection-state" class="connection-state"><span class="state-dot" aria-hidden="true"></span><span id="connection-label">Not paired</span></span>
+      </div>
+      <form id="connection-form">
+        <label for="code">Connection code</label>
+        <div class="connection-controls"><input id="code" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your ocl1.… code" required><button id="connect" class="button button-primary" type="submit">Connect <span aria-hidden="true">→</span></button></div>
+      </form>
+      <details class="setup-help"><summary>Where do I find my connection code?</summary><ol><li>In Phase Pal, open <strong>Chat Settings → General → External Conversations</strong> and enable sync.</li><li>Select <strong>Copy connection code</strong> and paste it above.</li><li>For web chats, sign in to <a href="https://chatgpt.com" target="_blank" rel="noreferrer">ChatGPT</a> or <a href="https://claude.ai" target="_blank" rel="noreferrer">Claude</a> in Chrome.</li></ol></details>
+    </section>
+
+    <form id="preferences">
+      <div class="preferences-grid">
+        <section class="card chats-card" aria-labelledby="chats-title">
+          <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 11a8 8 0 0 1-8 8H5l-4 3V11a8 8 0 0 1 8-8h4a8 8 0 0 1 8 8Z"/><path d="M7 10h8M7 14h5"/></svg></span><div><h2 id="chats-title">Which chats</h2><p>Start with a source. Bring over only what you want.</p></div></div>
+          <label for="source">Conversation source</label>
+          <div class="select-wrap"><select id="source" aria-describedby="source-note"><option value="chatgpt">ChatGPT</option><option value="claude">Claude web</option><option value="codex">Codex desktop / CLI — local threads</option><option value="claude-code">Claude Code — local sessions</option></select><span class="select-arrow" aria-hidden="true">⌄</span></div>
+          <p id="source-note" class="field-hint"></p>
+          <label for="chats">Conversations to sync</label>
+          <div class="select-wrap"><select id="chats"><option value="selected">Only selected chats</option><option value="all">All personal ChatGPT chats</option></select><span class="select-arrow" aria-hidden="true">⌄</span></div>
+          <section id="picker" class="picker">
+            <div class="picker-toolbar"><p class="field-hint">Load titles to choose your chats. Messages are imported when you sync.</p><button id="load" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0 1 13-2l2 2M19 17a8 8 0 0 1-13 2l-2-2"/></svg>Load / refresh chats</button></div>
+            <label for="search">Search loaded chats</label>
+            <div class="search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="search" type="search" placeholder="Find a conversation…"></div>
+            <p id="selection-count" class="selection-count"></p>
+            <div class="conversation-browser">
+              <div id="chat-empty" class="empty-state"><span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 10a7 7 0 0 1-7 7H6l-4 3V10a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7Z"/><path d="M7 9h8M7 13h5"/></svg></span><strong id="chat-empty-title">Your chats will appear here</strong><p id="chat-empty-description">Load your chat list, then select the conversations you want to sync.</p></div>
+              <div id="chat-list" role="group" aria-label="Source conversations"></div>
+            </div>
+            <p id="list-status" class="field-hint" role="status"></p>
+            <button id="more" class="button button-secondary" type="button" hidden>Load more chats</button>
+          </section>
+        </section>
+
+        <div class="settings-side">
+          <section class="card" aria-labelledby="history-title">
+            <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/></svg></span><div><h2 id="history-title">How much history</h2><p>A fresh start or the whole story.</p></div></div>
+            <label for="history">Messages to import</label>
+            <div class="select-wrap"><select id="history"><option value="all">All history</option><option value="last100">Last 100 messages per chat</option><option value="since">Messages from a chosen date</option></select><span class="select-arrow" aria-hidden="true">⌄</span></div>
+            <div id="date-row" hidden><label for="since-date">Include messages on or after</label><input id="since-date" type="date" min="1970-01-01" aria-describedby="date-hint"><p id="date-hint" class="field-hint">From 00:00 UTC on this date.</p></div>
+            <p class="field-hint">This choice applies separately to every selected chat.</p>
+          </section>
+
+          <section class="card" aria-labelledby="schedule-title">
+            <div class="heading-with-icon"><span class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 3v4M16 3v4M3 10h18"/><rect x="3" y="5" width="18" height="16" rx="3"/><path d="m8 15 3 3 5-5"/></svg></span><div><h2 id="schedule-title">When to sync</h2><p>Keep it current, on your terms.</p></div></div>
+            <label for="schedule">Sync schedule</label>
+            <div class="select-wrap"><select id="schedule"><option value="auto">Automatically, every minute</option><option value="manual">Manually, when I select Sync now</option></select><span class="select-arrow" aria-hidden="true">⌄</span></div>
+            <p class="field-hint">Save your choices for each source. Deselected chats stay in Phase Pal and stop updating.</p>
+          </section>
+        </div>
+      </div>
+
+      <section class="save-bar" aria-label="Save and sync">
+        <div class="save-status"><span class="status-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 12 3 3 5-6"/><circle cx="12" cy="12" r="9"/></svg></span><div><p id="status" role="status">Not connected.</p><p class="field-hint">Save your choices before syncing.</p></div></div>
+        <div class="actions"><button id="save" class="button button-primary" type="submit">Save sync options</button><button id="sync" class="button button-outline" type="button">Sync now <span aria-hidden="true">→</span></button></div>
+      </section>
+    </form>
+
+    <aside class="note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 8 4v6c0 5-8 10-8 10S4 17 4 12V6l8-4Z"/><path d="m8 12 3 3 5-6"/></svg><p><strong>Your conversations stay yours.</strong> Messages sent in Phase Pal stay in a local copy. They do not sync back to the source. Chats with no matching messages are skipped.</p></aside>
+    <details class="connection-options"><summary>Connection options</summary><div class="actions"><button id="full" class="button button-outline" type="button">Reimport chosen history</button><button id="disconnect" class="button button-quiet" type="button">Disconnect</button></div></details>
+    <footer>OpenChatLink <span aria-hidden="true">·</span> Made for Phase Pal</footer>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>
