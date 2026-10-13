@@ -2,14 +2,14 @@
   <title>OpenChatLink</title>
   <defs>
     <linearGradient id="rings" x1="108" y1="23" x2="108" y2="191" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ff9be5"/>
-      <stop offset=".3" stop-color="#b47aff"/>
-      <stop offset=".65" stop-color="#5685ff"/>
-      <stop offset="1" stop-color="#85f4e2"/>
+      <stop stop-color="#ff4b55"/>
+      <stop offset=".3" stop-color="#e45e9e"/>
+      <stop offset=".65" stop-color="#7967ed"/>
+      <stop offset="1" stop-color="#4285ff"/>
     </linearGradient>
     <linearGradient id="handle" x1="178" y1="178" x2="236" y2="236" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#778eff"/>
-      <stop offset="1" stop-color="#65d9e8"/>
+      <stop stop-color="#7967ed"/>
+      <stop offset="1" stop-color="#4285ff"/>
     </linearGradient>
     <radialGradient id="depth" cx="108" cy="108" r="85" gradientUnits="userSpaceOnUse">
       <stop offset=".35" stop-color="#080b1b"/>
