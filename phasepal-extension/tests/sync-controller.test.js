@@ -16,10 +16,13 @@ function fakeApi(initial={}) {
     alarmsApi:{create:async(name,options)=>alarms.set(name,options),clear:async name=>alarms.delete(name)},
   };
 }
-function setup(initial,collector) {
+function setup(initial,collector,feedback=[]) {
   const api=fakeApi(initial);
   const controller=createSyncController({...api,alarms:api.alarmsApi},{collector,
-    fetcher:async()=>({ok:true,status:200,json:async()=>({protocol:PROTOCOL,connectionId:'scope',targetName:'Reina'})})});
+    fetcher:async(url,init)=>{
+      if(url.includes('/sync/')) feedback.push({phase:url.split('/').at(-1),...JSON.parse(init.body)});
+      return {ok:true,status:200,json:async()=>({protocol:PROTOCOL,connectionId:'scope',targetName:'Reina'})};
+    }});
   return {api,controller};
 }
 
@@ -34,15 +37,29 @@ test('manual mode survives restart and ignores automatic and stale continuation 
 });
 
 test('a manual multi-batch import resumes after worker restart and stops when complete',async()=>{
-  let calls=0;
+  let calls=0; const feedback=[];
   const collector=async()=>({state:{checkpoint:++calls},conversations:1,hasMore:calls===1});
-  const first=setup({code,preferences:{chats:'all',schedule:'manual'}},collector);
+  const first=setup({code,preferences:{chats:'all',schedule:'manual'}},collector,feedback);
   await first.controller.sync();
   assert.equal(first.api.alarms.has(ALARM),false);assert.equal(first.api.alarms.has(CONTINUE),true);
-  const restarted=setup(first.api.state,collector);
+  assert.deepEqual(feedback.map(event=>event.phase),['start','progress']);
+  const restarted=setup(first.api.state,collector,feedback);
   await restarted.controller.ready;await restarted.controller.alarm(CONTINUE);
   assert.equal(calls,2);assert.equal(restarted.api.alarms.size,0);
+  assert.deepEqual(feedback.map(event=>event.phase),['start','progress','start','finish']);
+  assert.equal(new Set(feedback.map(event=>event.id)).size,1);
+  assert.ok(feedback.every(event=>event.manual));
+  assert.equal(restarted.api.state.syncRun,undefined);
   await restarted.controller.alarm(CONTINUE);assert.equal(calls,2);
+});
+
+test('automatic sync reports its origin and failures without becoming manual',async()=>{
+  const feedback=[];
+  const {controller}=setup({code,preferences:{chats:'all',schedule:'auto'}},
+    async()=>({state:{},conversations:0,failures:1}),feedback);
+  await controller.alarm(ALARM);
+  assert.deepEqual(feedback.map(({phase,manual,failures})=>({phase,manual,failures})),[
+    {phase:'start',manual:false,failures:0},{phase:'finish',manual:false,failures:1}]);
 });
 
 test('connecting with selected-only defaults imports nothing until choices are saved',async()=>{
@@ -57,16 +74,18 @@ test('connecting with selected-only defaults imports nothing until choices are s
 });
 
 test('changing filters aborts a pending import without publishing its stale checkpoint',async()=>{
+  const feedback=[];
   let started;
   const entering=new Promise(resolve=>{started=resolve;});
   const {api,controller}=setup({code,preferences:{chats:'all',schedule:'manual'}},async({signal})=>{
     started();
     await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
     return {state:{stale:true},conversations:1,hasMore:true};
-  });
+  },feedback);
   const syncing=controller.sync();await entering;
   await controller.save({chats:'selected',schedule:'manual'});await syncing;
   assert.equal(api.state.saved,undefined);assert.equal(api.state.batchPending,false);assert.equal(api.alarms.size,0);
+  assert.deepEqual(feedback.map(event=>event.phase),['start','cancel']);
 });
 
 test('disconnect retains user choices but clears pairing, checkpoints, and alarms',async()=>{

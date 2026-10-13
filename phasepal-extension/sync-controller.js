@@ -6,7 +6,7 @@ import {canCollect, normalizePreferences, snapshotKey} from './preferences.js';
 export const ALARM = 'openchatlink-sync';
 export const CONTINUE = 'openchatlink-continue';
 
-export function createSyncController(api, {collector = syncChatGPT, catalog = listChatGPTConversations, fetcher} = {}) {
+export function createSyncController(api, {collector = syncChatGPT, catalog = listChatGPTConversations, fetcher, source = 'chatgpt'} = {}) {
   let operation = null, cancellation = null, generation = 0;
   const writeStatus = (message, running = false) => api.storage.local.set({status: {message, running}});
   async function schedule() {
@@ -26,21 +26,41 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
   })();
 
   async function runOwned(full, trigger, owner) {
+    let feedbackClient, run;
     try {
       await ready;
-      const {code, saved, preferences, batchPending} = await api.storage.local.get(['code', 'saved', 'preferences', 'batchPending']);
+      const {code, saved, preferences, batchPending, syncRun} = await api.storage.local.get(['code', 'saved', 'preferences', 'batchPending', 'syncRun']);
       const settings = normalizePreferences(preferences);
       if (!code || owner !== generation) return;
       if ((trigger === 'auto' && settings.schedule !== 'auto') || (trigger === 'continue' && !batchPending)) return;
       if (!canCollect(settings)) {await writeStatus('Select chats and save your options before syncing.'); return;}
       cancellation = new AbortController();
+      feedbackClient = createClient(parsePairing(code), fetcher);
+      if (trigger === 'manual' && syncRun) await feedbackClient.syncFeedback(source, 'cancel', {...syncRun, failures: 0});
+      run = trigger !== 'manual' && batchPending && syncRun ? syncRun : {id: crypto.randomUUID(), manual: trigger === 'manual', failures: 0};
+      await api.storage.local.set({syncRun: run});
+      await feedbackClient.syncFeedback(source, 'start', {...run, failures: 0});
+      let heartbeat = Date.now();
       await writeStatus('Syncing your chosen history…', true);
       const result = await collect({pairing: parsePairing(code), preferences: settings, saved, full,
         collector, fetcher, signal: cancellation.signal,
-        report: async progress => owner === generation && writeStatus(
-          `Syncing: ${progress.processed ?? 0} conversations checked…`, true),
+        report: async progress => {
+          if (owner !== generation) return;
+          await writeStatus(`Syncing: ${progress.processed ?? 0} conversations checked…`, true);
+          if (Date.now() - heartbeat >= 5000) {
+            await feedbackClient.syncFeedback(source, 'progress', {...run, failures: 0}); heartbeat = Date.now();
+          }
+        },
       });
       if (owner !== generation) return;
+      run.failures = Math.min(10000, run.failures + (result.failures ?? 0));
+      if (result.hasMore) {
+        await feedbackClient.syncFeedback(source, 'progress', {...run, failures: 0});
+        await api.storage.local.set({syncRun: run});
+      } else {
+        await feedbackClient.syncFeedback(source, 'finish', run);
+        await api.storage.local.remove('syncRun');
+      }
       await api.storage.local.set({saved: result, batchPending: result.hasMore, status: {running: false,
         message: result.failures > 0 ? `Some chats could not be read. ${settings.schedule === 'auto' ? 'Automatic sync will retry.' : 'Select Sync now to retry.'}`
           : result.hasMore ? 'Sync is continuing with the next batch…'
@@ -51,6 +71,10 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
       else await api.alarms.clear(CONTINUE);
     } catch (error) {
       if (owner !== generation) return;
+      if (feedbackClient && run) {
+        try {await feedbackClient.syncFeedback(source, 'finish', {...run, failures: Math.min(10000, run.failures + 1)});} catch {}
+        await api.storage.local.remove('syncRun');
+      }
       await writeStatus(error.message);
       await api.action.setBadgeText({text: '!'});
     } finally { cancellation = null; }
@@ -66,6 +90,11 @@ export function createSyncController(api, {collector = syncChatGPT, catalog = li
     generation++;
     cancellation?.abort();
     if (operation) await operation;
+    const {code, syncRun} = await api.storage.local.get(['code', 'syncRun']);
+    if (code && syncRun) {
+      try {await createClient(parsePairing(code), fetcher).syncFeedback(source, 'cancel', {...syncRun, failures: 0});} catch {}
+    }
+    await api.storage.local.remove('syncRun');
   }
   // User commands are serialized so reconnect, disconnect, and saved filters cannot race.
   let commands = ready;
@@ -127,7 +156,7 @@ function scopedApi(api, source) {
 
 export function createSourceController(api, {fetcher, collectors = {}, catalogs = {}} = {}) {
   const browsers = Object.fromEntries(['chatgpt', 'claude'].map(source => [source, createSyncController(scopedApi(api, source), {
-    fetcher, collector: collectors[source] ?? (source === 'chatgpt' ? syncChatGPT : syncClaude),
+    fetcher, source, collector: collectors[source] ?? (source === 'chatgpt' ? syncChatGPT : syncClaude),
     catalog: catalogs[source] ?? (source === 'chatgpt' ? listChatGPTConversations : listClaudeConversations)
   })]));
   const sourceApi = source => {

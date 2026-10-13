@@ -67,6 +67,7 @@ export function createClient(pairing, fetcher = fetch, signal, progress = async 
   }
   return {
     health: () => request('/health'),
+    syncFeedback: (source, phase, run) => request(`/sync/${source}/${phase}`, {id: run.id, manual: run.manual, failures: run.failures ?? 0}),
     localCatalog: (source, cursor) => request(`/local/${source}/catalog?offset=${cursor ?? 0}`),
     localPreferences: (source, preferences) => request(`/local/${source}/preferences`, {preferences}),
     localSync: source => request(`/local/${source}/sync`, {}),
