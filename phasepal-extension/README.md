@@ -3,11 +3,13 @@
 Import ChatGPT, Claude web, local Codex desktop/CLI, and Claude Code chats into
 Phase Pal. The extension configures all four sources. Local reading runs inside
 Phase Pal, so no extra helper, hstry server, or Python script is needed.
-Use the current extension and app source patch together. This integration is
-unreleased and has no migration for earlier development imports.
+Use Chrome 120 or later and a Phase Pal build with **External Conversations**
+support. **Phase Pal 2.0.20 is not supported.** Loading the extension does not
+update the app.
 
-1. Download this repository's source ZIP, extract it, and keep the complete
-   `phasepal-extension` folder in a stable location. Use Chrome 120 or later.
+1. Open the [latest extension release](https://github.com/sobiesie/OpenChatLink/releases/latest).
+   Under **Assets**, download `OpenChatLink-<version>-chrome.zip` (not a source
+   code archive). Extract it and keep the `phasepal-extension` folder in a stable location.
 2. Open `chrome://extensions`, enable Developer mode, select Load unpacked,
    and choose that folder.
 3. In Phase Pal, select the character for new chats and enable Store Chat History.
