@@ -7,18 +7,15 @@ Use Chrome 120 or later and a Phase Pal build with **External Conversations**
 support. **Phase Pal 2.0.20 is not supported.** Loading the extension does not
 update the app.
 
-1. Open the [latest extension release](https://github.com/sobiesie/OpenChatLink/releases/latest).
-   Under **Assets**, download `OpenChatLink-<version>-chrome.zip` (not a source
-   code archive). Extract it and keep the `phasepal-extension` folder in a stable location.
-2. Open `chrome://extensions`, enable Developer mode, select Load unpacked,
-   and choose that folder.
-3. In Phase Pal, select the character for new chats and enable Store Chat History.
+1. Open [OpenChatLink in the Chrome Web Store](https://chromewebstore.google.com/detail/openchatlink-for-phase-pa/ghcddonakbfdhhdokmcchahilcakphdi),
+   click **Add to Chrome**, then confirm **Add extension**.
+2. In Phase Pal, select the character for new chats and enable Store Chat History.
    Open Chat Settings > General > External Conversations and enable external sync.
-4. Copy the connection code. Click the extension icon, paste the code, and connect.
-5. Choose a source. Sign in to ChatGPT or Claude for web chats. Select Load / refresh
+3. Copy the connection code. Click the extension icon, paste the code, and connect.
+4. Choose a source. Sign in to ChatGPT or Claude for web chats. Select Load / refresh
    chats, choose conversations, or explicitly choose all. Nothing imports by default.
-6. Choose all history, last 100 messages, or messages on/after a date (00:00 UTC).
-7. Save automatic or manual scheduling. In manual mode, select Sync now.
+5. Choose all history, last 100 messages, or messages on/after a date (00:00 UTC).
+6. Save automatic or manual scheduling. In manual mode, select Sync now.
    Repeat these choices independently for each source.
 
 Web sources check once per minute with Chrome and Phase Pal running. Local sources
@@ -71,3 +68,12 @@ An older installed binary does not gain these features by loading the extension.
 Run `node --test phasepal-extension/tests/*.test.js` from the repository root.
 See LICENSE and THIRD_PARTY_NOTICES.md for hstry collector provenance.
 The offline Python importer remains a separate ChatGPT-only fallback.
+
+## Development installation
+
+To use a local development build, open `chrome://extensions`, enable **Developer
+mode**, click **Load unpacked**, and select this `phasepal-extension` folder.
+Packaged development ZIPs are available from the
+[GitHub releases](https://github.com/ConsistencyAI/OpenChatLink/releases/latest).
+Extract the extension ZIP before loading its folder. To update an unpacked build,
+replace its files and click **Reload** on its card in `chrome://extensions`.

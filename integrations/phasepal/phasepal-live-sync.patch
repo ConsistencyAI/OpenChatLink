@@ -1569,7 +1569,7 @@ index 000000000..cce8e563d
 +            var title = new Label(Text("ChatV2_ExternalConversations_Title_Key", "External Conversations"));
 +            title.AddToClassList("chat-v2-settings-row__title"); syncCopy.Add(title);
 +            var description = new Label(Text("ChatV2_ExternalConversations_Setup_Key",
-+                "Load OpenChatLink in Chrome with Developer mode. Enable sync and copy the connection code. In the extension, choose ChatGPT, Claude, local Codex, or Claude Code and select your chats."));
++                "Install OpenChatLink from the Chrome Web Store. Enable sync and copy the connection code. In the extension, choose ChatGPT, Claude, local Codex, or Claude Code and select your chats."));
 +            description.AddToClassList("chat-v2-settings-row__description"); syncCopy.Add(description);
 +            syncRow.Add(syncCopy);
 +            _toggle = new Toggle(Text("ChatV2_ExternalConversations_EnableSources_Key", "Sync external conversations"))
@@ -2771,7 +2771,7 @@ index 000000000..471c61188
 +
 +## User setup
 +
-+1. Load the `phasepal-extension` folder in Chrome with Developer mode.
++1. Install [OpenChatLink from the Chrome Web Store](https://chromewebstore.google.com/detail/openchatlink-for-phase-pa/ghcddonakbfdhhdokmcchahilcakphdi).
 +2. Select the home character for new chats in Phase Pal. Enable Store Chat History.
 +3. In Chat Settings > General > External Conversations, enable external sync.
 +4. Copy the connection code into the extension and connect.
